@@ -1,9 +1,11 @@
 import argparse
+import ast
 import json
 import pprint
+from enum import Enum, auto
 from inspect import isclass
 from pathlib import Path
-from typing import Annotated, get_type_hints
+from typing import Annotated, get_type_hints, Tuple
 
 import abrain
 
@@ -13,14 +15,29 @@ class Config:
     control_frequency: Annotated[float, "How frequently to call the controller"] = 10
 
     ground_size: Annotated[float, "Total size of the arena"] = 5
-    item_range_max: Annotated[float, "Maximal distance from starting point to an object"] = 1
-    item_range_min: Annotated[float, "Minimal distance from starting point to an object"] = .5
     item_size: Annotated[float, "Size of an object"] = .1
 
     brain_types = [abrain.ANN.__name__, "CPG"]
-    brain_type: Annotated[float, f"The type of brain to use {brain_types}"] = abrain.ANN.__name__
+    brain_type: Annotated[str, f"The type of brain to use {brain_types}"] = abrain.ANN.__name__
     # brain_type = abrain.ANN.__name__
     abrain = abrain.Config
+
+    # vision: Annotated[bool, "Whether to use visual input"] = True
+    # vision_size: Annotated[Tuple[int, int], "Visual retina size (DEBUG)"] = 3, 2
+
+    class OpenGLLib(Enum):
+        EGL = auto()
+        OSMESA = auto()
+        GLFW = auto()
+
+    opengl_lib: Annotated[str, f"OpenGL back-end for vision"] = OpenGLLib.OSMESA.name
+
+    class ItemDistribution(Enum):
+        Sunflower = auto()
+        BinaryTree = auto()
+
+    item_distribution: Annotated[ItemDistribution, "How objects are placed"] = \
+        ItemDistribution.Sunflower
 
     @classmethod
     def write_json(cls, file: Path):
@@ -44,8 +61,13 @@ class Config:
         for k, v in cls._get_items(cls).items():
             hint = hints.get(k)
             if hint is not None:
+                k_type = hint.__args__[0]
+                if k_type == bool:
+                    k_type = ast.literal_eval
                 group.add_argument('--config-' + k, dest="config_" + k, metavar='V',
-                                   type=type(v), help='.'.join(hint.__metadata__))
+                                   type=k_type,
+                                   help=f"{'.'.join(hint.__metadata__)}"
+                                        f" (default: {v}, type: %(type)s)")
 
     @classmethod
     def argparse_process(cls, args):
@@ -76,8 +98,10 @@ class Config:
         elif isclass(attr):
             if attr == abrain.Config:
                 attr = abrain.Config.to_json()
-            else:
+            elif not issubclass(attr, Enum):
                 attr = Config._get_items(attr)
+            else:
+                attr = None
         elif callable(attr):
             attr = None
 

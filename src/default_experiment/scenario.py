@@ -1,11 +1,15 @@
 import json
+import logging
 import math
+import os
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, auto
 from pathlib import Path
 from random import Random
 from typing import Optional, List, Dict
 
+import cv2
+import mujoco
 import numpy as np
 from mujoco import MjData, MjModel
 
@@ -36,16 +40,19 @@ def default_body() -> Body:
 
 
 Runner.actorController_t = SensorControlData
+
+
 # Runner.environmentActorController_t = ActorControl
 
 
-def build_robot(brain_dna):
+def build_robot(brain_dna, with_labels):
     if Config.brain_type == abrain.ANN.__name__:
-        brain = ANNControl.Brain(brain_dna)
+        brain = ANNControl.Brain(brain_dna, with_labels)
     else:
         brain = CPGControl.Brain(brain_dna)
     robot = ModularRobot(default_body(), brain)
     return robot
+
 
 # ==============================================================================
 # Items
@@ -53,21 +60,23 @@ def build_robot(brain_dna):
 
 
 class CollectibleType(Enum):
-    Apple = 'sphere'
-    Pepper = 'ellipsoid'
+    Apple = 0
+    Pepper = 1
 
     @staticmethod
     def random(rng: Random):
         return rng.choice([t for t in CollectibleType])
 
+    def _v(self, separation):
+        return .5 * (1 + (2 * self.value - 1) * separation)
 
-def radius(c_type: 'CollectibleType'):
-    return {CollectibleType.Apple: 1, CollectibleType.Pepper: .5}[c_type]
+    def radius(self, separation: float):
+        v = 1-.5*self._v(separation)
+        return [1, v, v]
 
-
-def color(c_type: 'CollectibleType'):
-    return {CollectibleType.Apple: [0, 1, 0, 1],
-            CollectibleType.Pepper: [1, 0, 0, 1]}[c_type]
+    def color(self, separation: float):
+        v = self._v(separation)
+        return [v, 1-v, 0, 1]
 
 
 @dataclass
@@ -81,7 +90,6 @@ class CollectibleObject:
 # Scenario
 # ==============================================================================
 
-
 class Scenario:
     _rewards = {
         str(CollectibleType.Apple): 1,
@@ -90,16 +98,37 @@ class Scenario:
 
     _items: Optional[List[CollectibleObject]] = None
 
-    def __init__(self, runner: Runner):
+    def __init__(self, runner: Runner, run_id: Optional[int] = None):
         self.runner = runner
+        self.id = run_id
         self.collected = {str(e): 0 for e in CollectibleType}
         self._initial_position = self.subject_position()
         self._prev_position = self._initial_position
         self._steps = 0
         self._speed = 0
 
+    @staticmethod
+    def initial_position():
+        match Config.item_distribution:
+            case Config.ItemDistribution.Sunflower:
+                return [0, 0, 0]
+            case Config.ItemDistribution.BinaryTree:
+                return [-Config.ground_size / 2 + .25, 0, 0]
+
     def subject_position(self):
         return self.runner.get_actor_state(0).position
+
+    def pre_control_step(self, dt: float, mj_model: MjModel, mj_data: MjData):
+        # print("pre control step")
+        # if self._vision is not None:
+        #     img = self._vision.process(mj_model, mj_data)
+            # type = "viewer" if not self.runner.headless else \
+            #     "evolve" if hasattr(Config, "_evolving") else "headless"
+            # cv2.imwrite(f'vision.png',
+            #             cv2.cvtColor(np.flipud(img), cv2.COLOR_RGBA2BGR))
+            # print(img)
+
+        pass
 
     def post_control_step(self, dt: float, mj_model: MjModel, mj_data: MjData):
         collected = set()
@@ -115,7 +144,7 @@ class Scenario:
                 tokens = geom.name.split('#')
                 t_id = tokens[0]
                 b_id = int(tokens[1])
-                mj_data.mocap_pos[b_id][2] = 1
+                mj_data.mocap_pos[b_id][2] = -.25
                 self.collected[t_id] += self._rewards[t_id]
 
         p0 = self._prev_position
@@ -125,25 +154,41 @@ class Scenario:
 
         self._steps += 1
 
+    def process_video_frame(self, frame: np.ndarray):
+        ratio = .25
+        w, h, _ = frame.shape
+        raw_vision = self._vision.img
+        vision_ratio = raw_vision.shape[0] / raw_vision.shape[1]
+        iw, ih = int(ratio * w), int(ratio * h * vision_ratio)
+        scaled_vision = cv2.resize(
+            cv2.cvtColor(np.flipud(raw_vision), cv2.COLOR_RGBA2BGR),
+            (iw, ih),
+            interpolation=cv2.INTER_NEAREST
+        )
+        frame[h-ih:h, w-iw:w] = scaled_vision
+
     # ==========================================================================
 
     @staticmethod
-    def fitness_name(): return "speed"
+    def fitness_name():
+        return "speed"
 
     def fitness(self) -> Dict[str, float]:
         score = 0
         if self._steps > 0:
-            score += 100*self._speed / self._steps
+            score += 100 * self._speed / self._steps
         # score += sum([t for t in self.collected.values()])
         return {self.fitness_name(): score}
 
     @classmethod
-    def fitness_bounds(cls): return [(0, 2)]
+    def fitness_bounds(cls):
+        return [(0, 2)]
 
     # ==========================================================================
 
     @staticmethod
-    def descriptor_names(): return ["x", "y"]
+    def descriptor_names():
+        return ["x", "y"]
 
     def descriptors(self) -> Dict[str, float]:
         # random = Random()
@@ -171,11 +216,12 @@ class Scenario:
     # # ==========================================================================
 
     @staticmethod
-    def sunflower(n: int, alpha: float) -> np.ndarray:
-        # Number of points respectively on the boundary and inside the cirlce.
+    def old_sunflower(n: int, alpha: float) -> np.ndarray:
+        # Number of points respectively on the boundary and inside the circle.
         n_exterior = np.round(alpha * np.sqrt(n)).astype(int)
         n_interior = n - n_exterior
 
+        print(n_exterior, n_interior)
         # Ensure there are still some points in the inside...
         if n_interior < 1:
             raise RuntimeError(f"Parameter 'alpha' is too large ({alpha}), all "
@@ -185,7 +231,8 @@ class Scenario:
         angles = np.linspace(k_theta, k_theta * n, n)
 
         # Generate the radii.
-        r_interior = np.sqrt(np.linspace(Config.item_range_min, Config.item_range_max, n_interior))
+        r_interior = np.linspace(Config.item_range_min, Config.item_range_max, n_interior)
+        # r_interior = np.sqrt(np.linspace(Config.item_range_min, Config.item_range_max, n_interior))
         r_exterior = np.full((n_exterior,), Config.item_range_max)
         r = np.concatenate((r_interior, r_exterior))
 
@@ -193,16 +240,51 @@ class Scenario:
         return (r * np.stack((np.cos(angles), np.sin(angles)))).T
 
     @staticmethod
-    def generate_initial_items(rng: Random, count=10):
+    def sunflower(n: int, r_range) -> np.ndarray:
+        # Generate the angles. The factor k_theta corresponds to 2*pi/phi^2.
+        k_theta = np.pi * (3 - np.sqrt(5))
+        angles = np.linspace(k_theta, k_theta * n, n)
+
+        r_min, r_max = r_range
+        radii = np.sqrt(np.linspace(0, 1, n)) * (r_max - r_min) + r_min
+
+        # Return Cartesian coordinates from polar ones.
+        return (radii * np.stack((np.cos(angles), np.sin(angles)))).T
+
+    @staticmethod
+    def binary_tree(n: int, r_range):
+        levels = math.floor(math.log2(n))
+        width = Config.ground_size - Config.item_size
+        height = width
 
         items = []
-        for ix, iy in Scenario.sunflower(count, 1):
-            items.append(
-                CollectibleObject(ix, iy, CollectibleType.random(rng)))
+        for level in range(levels):
+            level_items = 2 ** (level + 1)
+            x = height * ((level + 1) / levels - .5)
+            if level == levels - 1:
+                level_items = n - len(items)
+            for i in range(level_items):
+                y = width * ((i + 1) / (level_items + 1) - .5)
+                items.append([x, y])
 
-        # items.append(   ## To test collisions
-        #     CollectableObject(0, 0, CollectableType.Apple)
-        # )
+        return items
+
+    @staticmethod
+    def generate_initial_items(count=20, r_range=(.5, 1)):
+        items = []
+        item_generators = {
+            Config.ItemDistribution.Sunflower: Scenario.sunflower,
+            Config.ItemDistribution.BinaryTree: Scenario.binary_tree
+        }
+
+        # count=512
+        # r_range=(.5,2)
+
+        if count > 0:
+            coordinates = item_generators[Config.item_distribution](count, r_range)
+            for ix, iy in coordinates:
+                items.append(
+                    CollectibleObject(ix, iy, list(CollectibleType)[len(items) % 2]))
 
         Scenario._items = items
 
@@ -222,9 +304,16 @@ class Scenario:
                 CollectibleObject(i[0], i[1], CollectibleType(i[2])) for i in json.load(f)
             ]
 
+    # ==========================================================================
+
     @staticmethod
     def amend(xml, options: RunnerOptions):
+        item_distinction = 1    # float(os.environ.get("separation", 1))
+
         robots = [r for r in xml.worldbody.body]
+
+        if Config.vision:
+            xml.visual.map.znear = ".001"
 
         # Reference to the ground
         ground = next(item for item in xml.worldbody.geom
@@ -248,31 +337,64 @@ class Scenario:
                           size=[gh_size, gh_size, .05],
                           type="plane", material="grid", condim=3)
 
+        xml.asset.add('texture', name="sky", type="skybox", builtin="flat",
+                      rgb1="0 0 0", rgb2="0 0 0",
+                      width=512, height=512,
+                      mark="random", markrgb="1 1 1")
+
+        # Funny but not currently relevant
+        ts, rnd = 8, item_distinction
+        xml.asset.add('texture', name=f"txt{CollectibleType.Apple.name}",
+                      type="cube", builtin="flat",
+                      rgb1="0 1 0", rgb2="0 1 0", width=ts, height=ts,
+                      mark="random", markrgb="1 0 0", random=rnd)
+        xml.asset.add('material', name=f"mat{CollectibleType.Apple.name}",
+                      texture=f"txt{CollectibleType.Apple.name}",
+                      texrepeat="1 1", texuniform="true", reflectance="0")
+        xml.asset.add('texture', name=f"txt{CollectibleType.Pepper.name}",
+                      type="cube", builtin="flat",
+                      rgb1="1 0 0", rgb2="1 0 0", width=ts, height=ts,
+                      mark="random", markrgb="0 1 0", random=rnd)
+        xml.asset.add('material',
+                      name=f"mat{CollectibleType.Pepper.name}",
+                      texture=f"txt{CollectibleType.Pepper.name}",
+                      texrepeat="1 1", texuniform="true", reflectance="0")
+
         gh_width = .025
         for i, x, y in [(0, 0, 1), (1, 1, 0), (2, 0, -1), (3, -1, 0)]:
-            b_height = g_size / 5
+            b_height = g_size / 100
             xml.worldbody.add('geom', name=f"border#{i}",
-                              pos=[x * (gh_size+gh_width),
-                                   y * (gh_size+gh_width), b_height],
+                              pos=[x * (gh_size + gh_width),
+                                   y * (gh_size + gh_width), b_height],
                               rgba=[1, 1, 1, 1],
-                              euler=[0, 0, i*math.pi/2],
+                              euler=[0, 0, i * math.pi / 2],
                               type="box", size=[gh_size, gh_width, b_height])
 
         if Scenario._items is not None:
             for i, item in enumerate(Scenario._items):
                 name = f"{item.type}#{i}"
+                # radii = [i_radius * 1 for r in item.type.radius(item_distinction)]
+
                 body = xml.worldbody.add('body', name=name,
-                                         pos=[item.x, item.y, i_radius * radius(item.type)],
+                                         pos=[item.x, item.y, 0],
                                          mocap=True)
                 body.add('geom', name=name,
-                         rgba=color(item.type),
-                         type=item.type.value,
-                         size=[i_radius, .5*i_radius, .5*i_radius])
+                         # rgba=item.type.color(item_distinction),
+                         type="sphere", size=f"{i_radius} 0 0",
+                         material=f"mat{item.type.name}")
+
+                # body = xml.worldbody.add('body', name=name,
+                #                          pos=[item.x, item.y, radii[-1]],
+                #                          mocap=True)
+                # body.add('geom', name=name,
+                #          rgba=item.type.color(item_distinction),
+                #          type="ellipsoid", size=radii)
+                #          # material="object")
 
         if options is not None and options.view is not None and options.view.mark_start:
             for robot in robots:
                 xml.worldbody.add('site',
-                                  name=robot.full_identifier[:-1]+"_start",
+                                  name=robot.full_identifier[:-1] + "_start",
                                   pos=robot.pos * [1, 1, 0], rgba=[0, 0, 1, 1],
                                   type="ellipsoid", size=[0.05, 0.05, 0.0001])
 

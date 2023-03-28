@@ -2,9 +2,11 @@
 
 import argparse
 import json
+import logging
 import math
 import os
 import pprint
+import random
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -16,10 +18,10 @@ from colorama import Fore, Style
 
 from abrain.core.genome import Genome
 from src.evolution.common import Individual
-from src.default_experiment.evaluator import Evaluator
+from src.default_experiment.evaluator import Evaluator, EvalOptions
 from src.default_experiment.scenario import Scenario
 from src.misc.config import Config
-from src.simulation.runner import RunnerOptions
+from src.simulation.runner import RunnerOptions, ANNDataLogging
 
 
 class Options:
@@ -29,7 +31,10 @@ class Options:
         self.config: Optional[Path] = None
         self.verbosity: int = 0
 
-        self.duration: Optional[int] = None
+        self.perf_check: bool = True
+
+        self.save_ann: bool = False
+        self.save_neurons: ANNDataLogging = ANNDataLogging.NONE
 
         self.view: bool = False
         self.speed: float = 1.0
@@ -59,10 +64,14 @@ class Options:
 
         group = parser.add_argument_group("Data collection",
                                           "Generate/Extract derived data from provided robot")
-        group.add_argument('--write-ann', dest="data_ann", action='store_true',
+        group.add_argument('--no-performance-check', dest="perf_check",
+                           action='store_false',
+                           help="Do not check for identical behavior")
+        group.add_argument('--write-ann', dest="save_ann", action='store_true',
                            help="Requests that the ANN be written to file")
-        group.add_argument('--write-outputs', dest="data_outputs", action='store_true',
-                           help="Requests that the ANN outputs be written to file")
+        group.add_argument('--write-neurons', dest="save_neurons",
+                           help=f"Requests that neuron states be written to file. "
+                                f"Valid values are {[v.name for v in ANNDataLogging]}")
 
         group = parser.add_argument_group("Rendering",
                                           "Additional rendering flags")
@@ -119,6 +128,9 @@ def generate_defaults(args):
 
 
 def try_locate(base: Path, name: str, levels: int = 0, strict: bool = True):
+    if not base.exists():
+        raise FileNotFoundError(f"Genome not found at {base}")
+
     path = base
     attempts = 0
     while attempts <= levels:
@@ -142,7 +154,9 @@ def main() -> int:
     Options.populate(parser)
     parser.parse_args(namespace=args)
 
-    if args.verbosity > 1:
+    logging.basicConfig(level=logging.DEBUG)
+
+    if args.verbosity >= 1:
         print("Command line-arguments:")
         pprint.PrettyPrinter(indent=2, width=1).pprint(args.__dict__)
 
@@ -155,10 +169,10 @@ def main() -> int:
     Config.read_json(args.config)
     Config.argparse_process(args)
 
-    options = RunnerOptions()
+    options = EvalOptions()
 
     if args.view:
-        options.view = RunnerOptions.View(
+        options.runner.view = RunnerOptions.View(
             start_paused=(not args.record and not args.auto_start),
             speed=args.speed,
             auto_quit=args.auto_quit,
@@ -168,12 +182,15 @@ def main() -> int:
         )
 
     if args.record:
-        options.record = RunnerOptions.Record(
+        options.runner.record = RunnerOptions.Record(
             video_file_path=args.robot.with_suffix(".mp4"),
             width=args.width, height=args.height)
 
+    if args.save_ann:
+        options.ann_save_path = args.robot.with_name("ann.html")
+
     if args.verbosity > 1:
-        print("Deduced runner options:", end='\n\t')
+        print("Deduced options:", end='\n\t')
         pprint.pprint(options)
 
         print("Loaded configuration from", args.config.absolute().resolve())
@@ -187,7 +204,11 @@ def main() -> int:
 
     if args.env is None:
         args.env = try_locate(args.robot, "env.json")
-    Scenario.deserialize(args.env)
+    try:
+        Scenario.deserialize(args.env)
+    except ValueError as e:
+        logging.error(f"Failed to load items: {e}")
+        Scenario.generate_initial_items(20)
 
     result, viewer = Evaluator.evaluate_rerun(genome, options)
 
@@ -196,11 +217,11 @@ def main() -> int:
 
     err = 0
 
-    if not defaults:
+    if args.perf_check and not defaults:
         err = performance_compare(Evaluator.Result(ind.fitnesses, ind.stats), result, args.verbosity)
 
-    if options.record is not None:
-        output = options.record.video_file_path
+    if options.runner.record is not None:
+        output = options.runner.record.video_file_path
         if not os.path.exists(output):
             print(f"Failed to generate {output}")
             err |= 1
@@ -211,7 +232,8 @@ def main() -> int:
         duration = humanize.precisedelta(timedelta(seconds=time.perf_counter() - start))
         print(f"Evaluated {args.robot.absolute().resolve()} in {duration} / {Config.simulation_time}s")
 
-    if viewer is not None and options.view is not None and not options.view.auto_quit:
+    if viewer is not None and options.runner.view is not None \
+            and not options.runner.view.auto_quit:
         while viewer.is_alive:
             viewer.render()
             time.sleep(1/60)

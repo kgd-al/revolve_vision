@@ -1,4 +1,5 @@
 import logging
+import pprint
 import random
 import shutil
 import sys
@@ -63,11 +64,10 @@ class Algorithm(Evolution):
             candidates = self.rng.sample(grid.items, k)
             candidate_cells = [grid.index_grid(c.features) for c in candidates]
             curiosity = [grid.curiosity[c] for c in candidate_cells]
-            if sum(curiosity) == 0:
+            if all([c == 0 for c in curiosity]):
                 cell = self.rng.choice(candidate_cells)
             else:
-                curiosity = [x/sum(curiosity) for x in curiosity]
-                cell = self.rng.choices(candidate_cells, curiosity)[0]
+                cell = candidate_cells[np.argmax(curiosity)]
             selection = candidates[candidate_cells.index(cell)]
             return selection
 
@@ -112,7 +112,7 @@ class Algorithm(Evolution):
 class Grid(containers.Grid):
     def __init__(self, **kwargs):
         containers.Grid.__init__(self, **kwargs)
-        self.curiosity = {x: 0 for x in self._index_grid_iterator()}
+        self.curiosity = np.zeros(self._shape, dtype=float)
 
     def update(self, iterable: Iterable,
                ignore_exceptions: bool = True, issue_warning: bool = True) -> int:
@@ -127,10 +127,13 @@ class Grid(containers.Grid):
 
 class Logger(algorithms.TQDMAlgorithmLogger):
 
-    final_filename = "final.p"
+    final_filename = "iteration-final.p"
+    iteration_filenames = "iteration-%03i.p"
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs, final_filename=Logger.final_filename)
+        super().__init__(*args, **kwargs,
+                         final_filename=Logger.final_filename,
+                         iteration_filenames=self.iteration_filenames)
 
     def _started_optimisation(self, algo: QDAlgorithmLike) -> None:
         """Do a mery dance so that tqdm uses stdout instead of stderr"""
@@ -150,29 +153,36 @@ class Logger(algorithms.TQDMAlgorithmLogger):
         summary_plots(evals=self.evals, iterations=self.iterations,
                       grid=self.algorithms[0].container,
                       labels=self.algorithms[0].labels,
-                      output_dir=self.log_base_path,
+                      output_dir=self.log_base_path, name=Path(self.final_filename).stem,
                       **kwargs)
 
 
 def plot_grid(data, filename, xy_range, cb_range, labels, fig_size, cmap="inferno",
               fontsize=12, nb_ticks=5):
     fig, ax = plt.subplots(figsize=fig_size)
-    # cax = drawGridInAx(data, ax, cmap=cmap,
-    #                    featuresBounds=featuresBounds, fitnessBounds=fitnessBounds,
-    #                    aspect=aspect, xlabel=xlabel, ylabel=ylabel, nbBins=nbBins, nbTicks=nbTicks)
+
+    if cb_range in [None, "equal"]:
+        cb_range_arg = cb_range
+        cb_range = np.quantile(data, [0, 1])
+
+        if isinstance(cb_range_arg, str):
+            if cb_range_arg == "equal":
+                extrema = max(abs(cb_range[0]), abs(cb_range[1]))
+                cb_range = (-extrema, extrema)
+            else:
+                raise ValueError(f"Unkown cb_range type '{cb_range}'")
 
     g_shape = data.shape
     cax = ax.imshow(data.T, interpolation="none", cmap=plt.get_cmap(cmap),
                     vmin=cb_range[0], vmax=cb_range[1],
                     aspect="equal",
-                    origin='lower', extent=(0, g_shape[0]+.5, 0, g_shape[1]+.5))
-    # ax.invert_yaxis()
+                    origin='lower', extent=(-.5, g_shape[0]+.5, -.5, g_shape[1]+.5))
 
     # Set labels
     def ticks(i):
-        pos = np.linspace(0, g_shape[i], nb_ticks)
-        return pos, [
-            f"{(xy_range[i][1] - xy_range[i][0]) * x / g_shape[i] + xy_range[i][0]:g}" for x in pos
+        return np.linspace(-.5, g_shape[i]+.5, nb_ticks), [
+            f"{(xy_range[i][1] - xy_range[i][0]) * x / g_shape[i] + xy_range[i][0]:3.3g}"
+            for x in np.linspace(0, g_shape[i], nb_ticks)
         ]
 
     ax.set_xlabel(labels[1], fontsize=fontsize)
@@ -200,24 +210,32 @@ def plot_grid(data, filename, xy_range, cb_range, labels, fig_size, cmap="infern
         logging.info(f"Generated {filename}")
     else:
         logging.warning(f"Failed to generate {filename}")
+    plt.close()
 
 
 def summary_plots(evals: pd.DataFrame, iterations: pd.DataFrame, grid: Grid,
-                  output_dir: Path,
+                  output_dir: Path, name: str,
                   labels, ext="png", fig_size=(4, 4), ticks=5):
-    output_path = Path(output_dir)
-    def path(name): return output_path.joinpath(f"{name}.{ext}")
 
-    plot_evals(evals["max0"], path("evals_fitnessmax0"), ylabel="Fitness")
-    ylim_contsize = (0, len(grid)) if np.isinf(grid.capacity) else (0, grid.capacity)
-    plot_evals(evals["cont_size"], path("evals_contsize"), ylim=ylim_contsize, ylabel="Container size")
-    plot_iterations(iterations["nb_updated"], path("iterations_nbupdated"), ylabel="Number of updated bins")
+    output_path = Path(output_dir).joinpath("plots")
+    def path(filename): return output_path.joinpath(f"{name}_{filename}.{ext}")
+    output_path.mkdir(exist_ok=True)
+    assert len(str(name)) > 0
 
-    for name, cb_label, data, bounds in [
-        ("performancesGrid", labels[0], grid.quality_array[..., 0], grid.fitness_domain[0]),
-        ("activityGrid", "activity", grid.activity_per_bin, (0, np.max(grid.activity_per_bin)))
+    if name.endswith("final"):
+        plot_evals(evals["max0"], path("fitness_max"), ylabel="Fitness", figsize=fig_size)
+        ylim_contsize = (0, len(grid)) if np.isinf(grid.capacity) else (0, grid.capacity)
+        plot_evals(evals["cont_size"], path("container_size"), ylim=ylim_contsize, ylabel="Container size",
+                   figsize=fig_size)
+        plot_iterations(iterations["nb_updated"], path("container_updates"), ylabel="Number of updated bins",
+                        figsize=fig_size)
+
+    for filename, cb_label, data, bounds in [
+        ("grid_fitness", labels[0], grid.quality_array[..., 0], grid.fitness_domain[0]),
+        ("grid_activity", "activity", grid.activity_per_bin, (0, np.max(grid.activity_per_bin))),
+        ("grid_curiosity", "curiosity", grid.curiosity, "equal")
     ]:
-        plot_path = path(name)
+        plot_path = path(filename)
         plot_grid(data=data, filename=plot_path,
                   xy_range=grid.features_domain, cb_range=bounds, labels=[cb_label, *labels[1:]],
-                  fig_size=fig_size, nb_ticks=5)
+                  fig_size=fig_size, nb_ticks=ticks)

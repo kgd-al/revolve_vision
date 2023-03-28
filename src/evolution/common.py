@@ -91,8 +91,10 @@ def normalize_run_parameters(options: NamedTuple):
         logging.info(f"Generated run id: {options.id}")
 
     if options.seed is None:
-        options.seed = \
-            options.id if options.id is not None and isinstance(options.id, int) else round(1000 * time.time())
+        try:
+            options.seed = int(options.id)
+        except ValueError:
+            options.seed = round(1000 * time.time())
         logging.info(f"Deduced seed: {options.seed}")
 
     # Define the run folder
@@ -102,7 +104,7 @@ def normalize_run_parameters(options: NamedTuple):
 
     # Check the thread parameter
     options.threads = max(1, min(options.threads, len(os.sched_getaffinity(0))))
-    logging.info(f"Parallel: {options.run_folder}")
+    logging.info(f"Parallel: {options.threads}")
 
     if options.verbosity >= 0:
         raw_dict = {k: v for k, v in options.__dict__.items() if not k.startswith('_')}
@@ -139,7 +141,7 @@ class Individual:
         return not self == other
 
     def __repr__(self):
-        return f"{{id={self.id()} name={self.name}, fitness={self.fitness}, features={self.features}}}"
+        return f"{{id={self.id()}, fitness={self.fitness}, features={self.features}}}"
 
     def update(self, r: EvaluationResult):
         self.fitnesses = r.fitnesses
@@ -151,8 +153,14 @@ class Individual:
         dct["genome"] = self.genome.to_json()
         return dct
 
+    def to_file(self, path):
+        with open(path, 'w') as f:
+            json.dump(self.to_json(), f)
+
     @classmethod
     def from_json(cls, data):
+        data.pop('id', None)
+        data.pop('parents', None)
         ind = cls(**data)
         ind.genome = Genome.from_json(data['genome'])
         return ind

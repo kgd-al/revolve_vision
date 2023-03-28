@@ -1,22 +1,22 @@
 import math
 import os.path
-import sys
-from abc import ABC
 from ast import literal_eval
 from collections import namedtuple
 from configparser import ConfigParser
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, auto, IntEnum, Flag
 from functools import partial
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Union
 
 import cv2
 import glfw
 import mujoco
+import numpy as np
 from mujoco import MjModel, MjData
 from mujoco_viewer import mujoco_viewer
 from pyrr import Vector3, Quaternion
+
 from revolve2.core.modular_robot import ModularRobot
 from revolve2.core.physics.environment_actor_controller import \
     EnvironmentActorController
@@ -24,16 +24,27 @@ from revolve2.core.physics.running import Environment
 from revolve2.core.physics.running import PosedActor, ActorControl
 from revolve2.runners.mujoco import LocalRunner
 from revolve2.runners.mujoco._local_runner import mjcf
-
 from ..misc.config import Config
 
 
 class CallbackType(Enum):
-    POST_CONTROL_STEP = 0
+    PRE_CONTROL_STEP = auto()
+    POST_CONTROL_STEP = auto()
+    VIDEO_FRAME_CAPTURED = auto()
 
 
 RunnerCallback = Callable[[float, MjModel, MjData], None]
-RunnerCallbacks = Dict[CallbackType, RunnerCallback]
+MovieCallback = Callable[[np.ndarray], None]
+
+RunnerCallbacks = Dict[CallbackType, Union[RunnerCallback, MovieCallback]]
+
+
+class ANNDataLogging(Flag):
+    INPUTS = auto()
+    HIDDEN = auto()
+    OUTPUTS = auto()
+    NONE = 0
+    ALL = INPUTS | HIDDEN | OUTPUTS
 
 
 @dataclass
@@ -47,7 +58,6 @@ class RunnerOptions:
         settings_restore: bool = True
         settings_save: bool = True
         mark_start: bool = True
-
     view: Optional[View] = None
 
     @dataclass
@@ -78,7 +88,8 @@ class Runner(LocalRunner):
 
     def __init__(self, robot: ModularRobot, options: RunnerOptions,
                  env_seeder: Callable[[mjcf.RootElement, RunnerOptions], None],
-                 callbacks: Optional[RunnerCallbacks] = None):
+                 callbacks: Optional[RunnerCallbacks] = None,
+                 position: Optional[Vector3] = None):
 
         LocalRunner.__init__(self)
 
@@ -91,16 +102,19 @@ class Runner(LocalRunner):
         actor, controller = robot.make_actor_and_controller()
         bounding_box = actor.calc_aabb()
         env = Environment(self.environmentActorController_t(controller))
+
+        if position is None:
+            position = Vector3([0, 0, 0])
+        else:
+            position = Vector3(position)
+        position = Vector3([
+            position.x, position.y,
+            position.z + bounding_box.size.z / 2.0 - bounding_box.offset.z
+        ])
         env.actors.append(
             PosedActor(
                 actor,
-                Vector3(
-                    [
-                        0.0,
-                        0.0,
-                        bounding_box.size.z / 2.0 - bounding_box.offset.z,
-                    ]
-                ),
+                position,
                 Quaternion(),
                 [0.0 for _ in controller.get_dof_targets()],
             )
@@ -146,16 +160,17 @@ class Runner(LocalRunner):
             self.video = namedtuple('Video', ['step', 'writer', 'last'])
             self.video.step = 1 / options.record.fps
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            size = (viewer.viewport.width, viewer.viewport.height)
             self.video.writer = cv2.VideoWriter(
                 str(options.record.video_file_path),
-                fourcc,
-                options.record.fps,
-                (viewer.viewport.width, viewer.viewport.height),
+                fourcc=fourcc,
+                fps=options.record.fps,
+                frameSize=size
             )
+            self.video.last = 0.0
 
             viewer._hide_menu = True
 
-            self.video.last = 0.0
         else:
             viewer._run_speed = options.view.speed
 
@@ -218,8 +233,13 @@ class Runner(LocalRunner):
         if self.video is not None and time >= self.video.last + self.video.step:
             self.video.last = int(time / self.video.step) * self.video.step
 
-            img = self.viewer.read_pixels()
-            self.video.writer.write(img)
+            frame = cv2.cvtColor(self.viewer.read_pixels(), cv2.COLOR_RGBA2BGR)
+
+            flag = CallbackType.VIDEO_FRAME_CAPTURED
+            if flag in self.callbacks:
+                self.callbacks[flag](frame)
+
+            self.video.writer.write(frame)
 
     def close_view(self):
         if self.options.view is not None and self.options.view.auto_quit:
@@ -236,8 +256,13 @@ class Runner(LocalRunner):
 
         while (time := self.data.time) < Config.simulation_time:
             # do control if it is time
-            is_control_step = False
-            if time >= last_control_time + control_step:
+            is_control_step = (time >= last_control_time + control_step)
+
+            if is_control_step and \
+                    CallbackType.PRE_CONTROL_STEP in self.callbacks:
+                self.callbacks[CallbackType.PRE_CONTROL_STEP](control_step, self.model, self.data)
+
+            if is_control_step:
                 is_control_step = True
                 last_control_time = \
                     math.floor(time / control_step) * control_step

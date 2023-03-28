@@ -10,7 +10,7 @@ setup(name='RevolveVision',
 
             "numpy",
             "revolve2_core", "revolve2_actor_controller", "revolve2_runners_mujoco",
-            "mujoco", "opencv_python", "glfw", "pyrr",
+            "mujoco", "glfw", "pyrr",
 
             "colorama",
             "humanize",

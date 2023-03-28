@@ -1,11 +1,13 @@
 import logging
-import random
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
 
 import abrain
 from abrain import Genome
+from abrain.core.ann import plotly_render
 from revolve2.core.physics.environment_actor_controller import EnvironmentActorController
+from ..simulation.control import OpenGLVision
 from .scenario import build_robot, Scenario
 from ..evolution.common import Individual
 from ..misc.config import Config
@@ -14,8 +16,15 @@ from ..simulation.runner import Runner, RunnerOptions, CallbackType
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class EvalOptions:
+    runner: RunnerOptions = RunnerOptions()
+
+    ann_save_path: Optional[Path] = None
+
+
 class Evaluator:
-    options: RunnerOptions = None
+    options: Optional[EvalOptions] = None
 
     @classmethod
     def set_runner_options(cls, options: RunnerOptions):
@@ -38,25 +47,41 @@ class Evaluator:
         return values
 
     @classmethod
-    def _evaluate(cls, genome: Genome, options: RunnerOptions, rerun: bool):
+    def _evaluate(cls, genome: Genome, options: EvalOptions, rerun: bool):
         r = cls.Result()
         viewer = None
 
-        robot = build_robot(genome)
+        with_labels = (options.ann_save_path is not None)
+
+        robot = build_robot(genome, with_labels)
         is_abrain = (Config.brain_type == abrain.ANN.__name__)
         if not is_abrain:
             # Default CPG does not use external (sensor) data -> use default controller
             Runner.environmentActorController_t = EnvironmentActorController
 
-        runner = Runner(robot, options, Scenario.amend)
-        scenario = Scenario(runner)
+        runner = Runner(robot, options.runner, Scenario.amend,
+                        position=Scenario.initial_position())
+        scenario = Scenario(runner, genome.id())
 
+        runner.callbacks[CallbackType.PRE_CONTROL_STEP] = scenario.pre_control_step
         runner.callbacks[CallbackType.POST_CONTROL_STEP] = scenario.post_control_step
 
+        if options.runner.record is not None:
+            runner.callbacks[CallbackType.VIDEO_FRAME_CAPTURED] = scenario.process_video_frame
+
         r.reject = False
+        assert is_abrain
+        brain_controller = runner.controller.actor_controller
         if is_abrain:
-            brain: abrain.ANN = runner.controller.actor_controller.brain
+            brain: abrain.ANN = brain_controller.brain
             r.reject |= (brain.empty())
+
+        if hasattr(genome, 'vision'):
+            brain_controller.vision = \
+                OpenGLVision(runner.model, genome.vision, runner.headless)
+
+        if (p := options.ann_save_path) is not None:
+            plotly_render(brain, runner.controller.actor_controller.labels).write_html(p)
 
         if rerun:
             viewer = runner.viewer
@@ -86,6 +111,8 @@ class Evaluator:
                 'pepr': -scenario.collected[str(CollectibleType.Pepper)],
             })
 
+        # print(f"Evaluated\n {pprint.pformat(genome.to_json())}\n {pprint.pformat(r)}\n")
+
         if rerun:
             return r, viewer
         else:
@@ -96,5 +123,5 @@ class Evaluator:
         return cls._evaluate(genome, cls.options, False)
 
     @classmethod
-    def evaluate_rerun(cls, genome: Genome, options: RunnerOptions):
+    def evaluate_rerun(cls, genome: Genome, options: EvalOptions):
         return cls._evaluate(genome, options, True)
