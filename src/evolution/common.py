@@ -7,11 +7,11 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Callable, Optional
+from typing import Dict, NamedTuple, Callable, Optional
 
 from colorama import Fore, Style
 
-from abrain.core.genome import Genome
+from ..misc.genome import RVGenome
 
 
 class Tee:
@@ -123,7 +123,7 @@ class EvaluationResult:
 class Individual:
     DataCollection = EvaluationResult.DataCollection
 
-    genome: Genome
+    genome: RVGenome
     fitnesses: DataCollection = field(default_factory=dict)
     descriptors: DataCollection = field(default_factory=dict)
     stats: DataCollection = field(default_factory=dict)
@@ -162,7 +162,7 @@ class Individual:
         data.pop('id', None)
         data.pop('parents', None)
         ind = cls(**data)
-        ind.genome = Genome.from_json(data['genome'])
+        ind.genome = RVGenome.from_json(data['genome'])
         return ind
 
     @classmethod

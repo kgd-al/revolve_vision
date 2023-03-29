@@ -15,12 +15,13 @@ import humanize
 from qdpy.base import ParallelismManager
 
 import abrain
-from abrain.core.genome import logger as genome_logger, Genome
+from abrain.core.genome import logger as genome_logger
 from src.default_experiment.evaluator import Evaluator
 from src.default_experiment.scenario import Scenario
 from src.evolution.common import Tee
 from src.evolution.map_elite import Grid, Algorithm, Logger, QDIndividual
 from src.misc.config import Config
+from src.misc.genome import RVGenome
 
 
 class Options:
@@ -96,7 +97,7 @@ class Options:
 
 def eval_mujoco(ind: QDIndividual):
     assert isinstance(ind, QDIndividual)
-    assert isinstance(ind.genome, Genome)
+    assert isinstance(ind.genome, RVGenome)
     assert ind.id() is not None, "ID-less individual"
     r: Evaluator.Result = Evaluator.evaluate_evo(ind.genome)
     ind.update(r)

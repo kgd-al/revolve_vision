@@ -30,14 +30,21 @@ class Config:
         OSMESA = auto()
         GLFW = auto()
 
-    opengl_lib: Annotated[str, f"OpenGL back-end for vision"] = OpenGLLib.OSMESA.name
+    opengl_lib: Annotated[str, "OpenGL back-end for vision"] = OpenGLLib.OSMESA.name
 
-    class ItemDistribution(Enum):
-        Sunflower = auto()
-        BinaryTree = auto()
+    class RetinaConfiguration(Enum):
+        # Mangled
+        X = auto()      # side-by-side
+        Y = auto()      # different depths
+        Z = auto()      # on top of one another
+        # Retina mimicking
+        R0 = auto()     # poor
+        R1 = auto()     # better
+        R2 = auto()     # best
 
-    item_distribution: Annotated[ItemDistribution, "How objects are placed"] = \
-        ItemDistribution.Sunflower
+    retina_configuration: Annotated[RetinaConfiguration,
+                                    "Mapping of the 3D camera to the 3D substrate"] = \
+        RetinaConfiguration.Y
 
     @classmethod
     def write_json(cls, file: Path):

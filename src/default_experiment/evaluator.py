@@ -4,14 +4,14 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 import abrain
-from abrain import Genome
 from abrain.core.ann import plotly_render
 from revolve2.core.physics.environment_actor_controller import EnvironmentActorController
 from ..simulation.control import OpenGLVision
 from .scenario import build_robot, Scenario
 from ..evolution.common import Individual
+from ..misc.genome import RVGenome
 from ..misc.config import Config
-from ..simulation.runner import Runner, RunnerOptions, CallbackType
+from ..simulation.runner import Runner, RunnerOptions, CallbackType, ANNDataLogging
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +47,12 @@ class Evaluator:
         return values
 
     @classmethod
-    def _evaluate(cls, genome: Genome, options: EvalOptions, rerun: bool):
+    def _evaluate(cls, genome: RVGenome, options: EvalOptions, rerun: bool):
         r = cls.Result()
         viewer = None
 
-        with_labels = (options.ann_save_path is not None)
+        with_labels = (options.ann_save_path is not None
+                       or options.runner.ann_data_logging != ANNDataLogging.NONE)
 
         robot = build_robot(genome, with_labels)
         is_abrain = (Config.brain_type == abrain.ANN.__name__)
@@ -81,7 +82,9 @@ class Evaluator:
                 OpenGLVision(runner.model, genome.vision, runner.headless)
 
         if (p := options.ann_save_path) is not None:
+            p = options.runner.save_folder.joinpath(p)
             plotly_render(brain, runner.controller.actor_controller.labels).write_html(p)
+            logging.info(f"Generated {p}")
 
         if rerun:
             viewer = runner.viewer
@@ -119,9 +122,9 @@ class Evaluator:
             return r
 
     @classmethod
-    def evaluate_evo(cls, genome: Genome) -> Result:
+    def evaluate_evo(cls, genome: RVGenome) -> Result:
         return cls._evaluate(genome, cls.options, False)
 
     @classmethod
-    def evaluate_rerun(cls, genome: Genome, options: EvalOptions):
+    def evaluate_rerun(cls, genome: RVGenome, options: EvalOptions):
         return cls._evaluate(genome, options, True)

@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 from typing import List, Tuple, Optional
 
 import cv2
@@ -13,8 +14,9 @@ from abrain import Point, CPPN
 from revolve2.actor_controller import ActorController
 from revolve2.core.modular_robot import Brain, Body, ActiveHinge
 from revolve2.core.modular_robot.brains import BrainCpgNetworkNeighbour
-from ..simulation.runner import DefaultActorControl
 from ..misc.config import Config
+from ..misc.genome import RVGenome
+from ..simulation.runner import DefaultActorControl, ANNDataLogging
 
 
 # ==============================================================================
@@ -90,6 +92,17 @@ class SensorControlData(DefaultActorControl):
 # ANN (abrain) controller (also handles the camera)
 # ==============================================================================
 
+def retina_mapper():
+    rc = Config.RetinaConfiguration
+    lut = {
+        rc.Y: lambda i, j, k, w, h:
+            Point(2 * i / (w-1) - 1,
+                  -1 + (k+1) * .1,
+                  2 * j / (h-1) - 1)
+    }
+    return lut[Config.retina_configuration]
+
+
 class ANNControl:
     class Controller(ActorController):
         def __init__(self, genome: abrain.Genome, inputs: List[Point], outputs: List[Point]):
@@ -99,23 +112,57 @@ class ANNControl:
             # Vision is initialized by caller
             self.vision: Optional[OpenGLVision] = None
 
-            self._step = 0 ## TODO DEBUG REMOVE
+            self._step = 0
 
         def get_dof_targets(self) -> List[float]:
             return [self.o_buffer[i] for i in range(len(self.o_buffer))]
 
         def step(self, dt: float, data: 'ControlData') -> None:
-            self.i_buffer[:len(data.sensors)] = [pos for pos in data.sensors]
+            off = len(data.sensors)
+            self.i_buffer[:off] = [pos for pos in data.sensors]
 
             if self.vision is not None:
                 img = self.vision.process(data.model, data.data)
-                cv2.imwrite(f'vision_{self._step:010d}.png',
-                            cv2.cvtColor(np.flipud(img), cv2.COLOR_RGBA2BGR))
-                print(img)
+                # cv2.imwrite(f'vision_{self._step:010d}.png',
+                #             cv2.cvtColor(np.flipud(img), cv2.COLOR_RGBA2BGR))
+
+                self.i_buffer[off:] = [x / 255 for x in img.flat]
 
             self._step += 1
 
             self.brain.__call__(self.i_buffer, self.o_buffer)
+
+        def start_log_ann_data(self,
+                               level: Optional[ANNDataLogging] = None,
+                               filepath: Optional[Path] = None):
+            self._ann_log_level = level
+            self._ann_log_file = open(filepath, 'w')
+
+            ann_type = abrain.ANN.Neuron.Type
+            log_type = ANNDataLogging
+            self._valid_types_flag = [
+                ann_t for ann_t, log_t in [
+                    (ann_type.I, log_type.INPUTS),
+                    (ann_type.H, log_type.HIDDEN),
+                    (ann_type.O, log_type.OUTPUTS),
+                ] if level & log_t]
+
+            self._ann_log_file.write("Step")
+            for n in self.brain.neurons():
+                if n.type in self._valid_types_flag:
+                    self._ann_log_file.write(f" {n.pos}:{self.labels.get(n.pos)}")
+            self._ann_log_file.write("\n")
+
+        def log_ann_data(self):
+            self._ann_log_file.write(f"{self._step}")
+            for n in self.brain.neurons():
+                if n.type in self._valid_types_flag:
+                    self._ann_log_file.write(f" {n.value}")
+            self._ann_log_file.write("\n")
+
+        def stop_log_ann_data(self):
+            logging.info(f"Generated {self._ann_log_file.name}")
+            self._ann_log_file.close()
 
         @classmethod
         def deserialize(cls, data: StaticData) -> Serializable:
@@ -125,7 +172,7 @@ class ANNControl:
             raise NotImplementedError
 
     class Brain(Brain):
-        def __init__(self, brain_dna, with_labels=False):
+        def __init__(self, brain_dna: RVGenome, with_labels=False):
             self.brain_dna = brain_dna
             self.with_labels = with_labels
 
@@ -157,26 +204,25 @@ class ANNControl:
                 outputs.append(op)
 
                 if self.with_labels:
-                    labels[ip] = f"HP{i}"
-                    labels[op] = f"HM{i}"
+                    labels[ip] = f"P{i}"
+                    labels[op] = f"M{i}"
 
-            if Config.vision:
-                w, h = Config.vision_size
-                for i in range(w):
-                    for j in range(h):
-                        for k, c in enumerate("RGB"):
-                            p = Point(2 * i / (w-1) - 1,
-                                      -1 + (k+1) * .1,
-                                      2 * j / (h-1) - 1)
+            if self.brain_dna.with_vision():
+                mapper = retina_mapper()
+                w, h = self.brain_dna.vision
+                for j in reversed(range(h)):
+                    for i in range(w):
+                        for k, c in enumerate("BGR"):
+                            p = mapper(i, j, k, w, h)
                             inputs.append(p)
 
                             if self.with_labels:
-                                labels[p] = f"{c}:{i},{j}"
+                                labels[p] = f"{c}[{i},{j}]"
 
             # Ensure no duplicates
             assert all(len(set(io_)) == len(io_) for io_ in [inputs, outputs])
 
-            c = ANNControl.Controller(self.brain_dna, inputs, outputs)
+            c = ANNControl.Controller(self.brain_dna.brain, inputs, outputs)
 
             if self.with_labels:
                 c.labels = labels

@@ -19,12 +19,13 @@ from qdpy.phenotype import Individual as QDPyIndividual, IndividualLike, Fitness
     Features as QDPyFeatures
 from qdpy.plots import plot_evals, plot_iterations
 
-from abrain.core.genome import Genome, GIDManager
+from abrain.core.genome import GIDManager
 from .common import Individual, normalize_run_parameters
+from ..misc.genome import RVGenome
 
 
 class QDIndividual(Individual, QDPyIndividual):
-    def __init__(self, genome: Genome, **kwargs):
+    def __init__(self, genome: RVGenome, **kwargs):
         Individual.__init__(self, genome=genome, **kwargs)
         QDPyIndividual.__init__(self)
         assert self.id() is not None
@@ -72,7 +73,7 @@ class Algorithm(Evolution):
             return selection
 
         def init(_):
-            genome = Genome.random(self.rng, self.id_manager)
+            genome = RVGenome.random(self.rng, self.id_manager)
             for _ in range(options.initial_mutations):
                 genome.mutate(self.rng)
             return QDIndividual(genome)

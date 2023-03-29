@@ -109,25 +109,12 @@ class Scenario:
 
     @staticmethod
     def initial_position():
-        match Config.item_distribution:
-            case Config.ItemDistribution.Sunflower:
-                return [0, 0, 0]
-            case Config.ItemDistribution.BinaryTree:
-                return [-Config.ground_size / 2 + .25, 0, 0]
+        return [0, 0, 0]
 
     def subject_position(self):
         return self.runner.get_actor_state(0).position
 
     def pre_control_step(self, dt: float, mj_model: MjModel, mj_data: MjData):
-        # print("pre control step")
-        # if self._vision is not None:
-        #     img = self._vision.process(mj_model, mj_data)
-            # type = "viewer" if not self.runner.headless else \
-            #     "evolve" if hasattr(Config, "_evolving") else "headless"
-            # cv2.imwrite(f'vision.png',
-            #             cv2.cvtColor(np.flipud(img), cv2.COLOR_RGBA2BGR))
-            # print(img)
-
         pass
 
     def post_control_step(self, dt: float, mj_model: MjModel, mj_data: MjData):
@@ -216,30 +203,6 @@ class Scenario:
     # # ==========================================================================
 
     @staticmethod
-    def old_sunflower(n: int, alpha: float) -> np.ndarray:
-        # Number of points respectively on the boundary and inside the circle.
-        n_exterior = np.round(alpha * np.sqrt(n)).astype(int)
-        n_interior = n - n_exterior
-
-        print(n_exterior, n_interior)
-        # Ensure there are still some points in the inside...
-        if n_interior < 1:
-            raise RuntimeError(f"Parameter 'alpha' is too large ({alpha}), all "
-                               f"points would end-up on the boundary.")
-        # Generate the angles. The factor k_theta corresponds to 2*pi/phi^2.
-        k_theta = np.pi * (3 - np.sqrt(5))
-        angles = np.linspace(k_theta, k_theta * n, n)
-
-        # Generate the radii.
-        r_interior = np.linspace(Config.item_range_min, Config.item_range_max, n_interior)
-        # r_interior = np.sqrt(np.linspace(Config.item_range_min, Config.item_range_max, n_interior))
-        r_exterior = np.full((n_exterior,), Config.item_range_max)
-        r = np.concatenate((r_interior, r_exterior))
-
-        # Return Cartesian coordinates from polar ones.
-        return (r * np.stack((np.cos(angles), np.sin(angles)))).T
-
-    @staticmethod
     def sunflower(n: int, r_range) -> np.ndarray:
         # Generate the angles. The factor k_theta corresponds to 2*pi/phi^2.
         k_theta = np.pi * (3 - np.sqrt(5))
@@ -252,36 +215,13 @@ class Scenario:
         return (radii * np.stack((np.cos(angles), np.sin(angles)))).T
 
     @staticmethod
-    def binary_tree(n: int, r_range):
-        levels = math.floor(math.log2(n))
-        width = Config.ground_size - Config.item_size
-        height = width
-
-        items = []
-        for level in range(levels):
-            level_items = 2 ** (level + 1)
-            x = height * ((level + 1) / levels - .5)
-            if level == levels - 1:
-                level_items = n - len(items)
-            for i in range(level_items):
-                y = width * ((i + 1) / (level_items + 1) - .5)
-                items.append([x, y])
-
-        return items
-
-    @staticmethod
     def generate_initial_items(count=20, r_range=(.5, 1)):
         items = []
-        item_generators = {
-            Config.ItemDistribution.Sunflower: Scenario.sunflower,
-            Config.ItemDistribution.BinaryTree: Scenario.binary_tree
-        }
-
         # count=512
         # r_range=(.5,2)
 
         if count > 0:
-            coordinates = item_generators[Config.item_distribution](count, r_range)
+            coordinates = Scenario.sunflower(count, r_range)
             for ix, iy in coordinates:
                 items.append(
                     CollectibleObject(ix, iy, list(CollectibleType)[len(items) % 2]))
@@ -312,8 +252,7 @@ class Scenario:
 
         robots = [r for r in xml.worldbody.body]
 
-        if Config.vision:
-            xml.visual.map.znear = ".001"
+        xml.visual.map.znear = ".001"
 
         # Reference to the ground
         ground = next(item for item in xml.worldbody.geom

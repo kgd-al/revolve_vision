@@ -5,17 +5,16 @@ import logging
 import sys
 import time
 from datetime import timedelta
-from pathlib import Path
 from typing import Dict
 
 import humanize
 
 import abrain
-from abrain.core.genome import Genome
-from src.evolution.naive_ga import Evolver, NaiveTournamentSelection
 from src.default_experiment.evaluator import Evaluator
 from src.default_experiment.scenario import Scenario
-from misc.config import Config
+from src.evolution.naive_ga import Evolver, NaiveTournamentSelection
+from src.misc.config import Config
+from src.misc.genome import RVGenome
 
 
 # from genotype import random as random_genotype
@@ -106,8 +105,8 @@ def main():
     evolver = Evolver(args, algorithm=NaiveTournamentSelection())
 
     evolver.set_callbacks(
-        random=Genome.random,
-        mutate=Genome.mutated,
+        random=RVGenome.random,
+        mutate=RVGenome.mutated,
         crossover=None,
         evaluate=Evaluator.evaluate_evo,
     )

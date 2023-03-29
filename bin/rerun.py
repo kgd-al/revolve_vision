@@ -16,12 +16,12 @@ from typing import Dict, Optional
 import humanize
 from colorama import Fore, Style
 
-from abrain.core.genome import Genome
 from src.evolution.common import Individual
 from src.default_experiment.evaluator import Evaluator, EvalOptions
 from src.default_experiment.scenario import Scenario
 from src.misc.config import Config
 from src.simulation.runner import RunnerOptions, ANNDataLogging
+from src.misc.genome import RVGenome
 
 
 class Options:
@@ -106,7 +106,7 @@ class Options:
 
 def generate_defaults(args):
     rng = Random(0)
-    genome = Genome.random(rng)
+    genome = RVGenome.random(rng)
     ind = Individual(genome)
 
     def_folder = Path("tmp/defaults/")
@@ -170,6 +170,7 @@ def main() -> int:
     Config.argparse_process(args)
 
     options = EvalOptions()
+    save_folder = False
 
     if args.view:
         options.runner.view = RunnerOptions.View(
@@ -182,12 +183,22 @@ def main() -> int:
         )
 
     if args.record:
+        save_folder = True
         options.runner.record = RunnerOptions.Record(
-            video_file_path=args.robot.with_suffix(".mp4"),
+            video_file_path=args.robot.stem + ".movie.mp4",
             width=args.width, height=args.height)
 
     if args.save_ann:
-        options.ann_save_path = args.robot.with_name("ann.html")
+        save_folder = True
+        options.ann_save_path = args.robot.stem + ".ann.html"
+
+    if args.save_neurons != ANNDataLogging.NONE:
+        save_folder = True
+        options.runner.ann_data_logging = ANNDataLogging[args.save_neurons]
+        options.runner.ann_data_file = args.robot.stem + ".neurons.dat"
+
+    if save_folder:
+        options.runner.save_folder = args.robot.parent
 
     if args.verbosity > 1:
         print("Deduced options:", end='\n\t')

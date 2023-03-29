@@ -17,9 +17,9 @@ from typing import Dict, NamedTuple, Callable, List, Type
 
 import numpy as np
 
-from abrain.core.genome import Genome
 from ..evolution.common import normalize_run_parameters
 from ..misc.config import Config
+from ..misc.genome import RVGenome
 
 
 class SelectionAlgorithm(dict, ABC):
@@ -101,9 +101,9 @@ class Evolver:
     genome_class: Type
     algorithm_class: Type
 
-    CallbackRandomG = Callable[[Random], Genome]
-    CallbackMutateG = Callable[[Random, Genome], Genome]
-    CallbackCrossoverG = Callable[[Random, Genome, Genome], Genome]
+    CallbackRandomG = Callable[[Random], RVGenome]
+    CallbackMutateG = Callable[[Random, RVGenome], RVGenome]
+    CallbackCrossoverG = Callable[[Random, RVGenome, RVGenome], RVGenome]
     CallbackEvaluate = Callable[['Ind'], 'Result']
 
     class Reproduction(Enum):

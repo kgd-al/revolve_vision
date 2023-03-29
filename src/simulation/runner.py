@@ -4,7 +4,7 @@ from ast import literal_eval
 from collections import namedtuple
 from configparser import ConfigParser
 from dataclasses import dataclass
-from enum import Enum, auto, IntEnum, Flag
+from enum import Enum, auto, Flag
 from functools import partial
 from pathlib import Path
 from typing import Callable, Dict, Optional, Union
@@ -69,6 +69,9 @@ class RunnerOptions:
 
         fps: int = 24
     record: Optional[Record] = None
+
+    save_folder: Optional[Path] = None
+    ann_data_logging: ANNDataLogging = ANNDataLogging.NONE
 
 
 class DefaultActorControl(ActorControl):
@@ -254,15 +257,20 @@ class Runner(LocalRunner):
 
         control_step = 1 / Config.control_frequency
 
+        if self.options.ann_data_logging != ANNDataLogging.NONE:
+            self.controller.actor_controller.start_log_ann_data(
+                self.options.ann_data_logging,
+                self.options.save_folder.joinpath(self.options.ann_data_file)
+            )
+
         while (time := self.data.time) < Config.simulation_time:
             # do control if it is time
             is_control_step = (time >= last_control_time + control_step)
 
-            if is_control_step and \
-                    CallbackType.PRE_CONTROL_STEP in self.callbacks:
-                self.callbacks[CallbackType.PRE_CONTROL_STEP](control_step, self.model, self.data)
-
             if is_control_step:
+                if CallbackType.PRE_CONTROL_STEP in self.callbacks:
+                    self.callbacks[CallbackType.PRE_CONTROL_STEP](control_step, self.model, self.data)
+
                 is_control_step = True
                 last_control_time = \
                     math.floor(time / control_step) * control_step
@@ -280,12 +288,18 @@ class Runner(LocalRunner):
             # step simulation
             mujoco.mj_step(self.model, self.data)
 
-            if is_control_step and \
-                    CallbackType.POST_CONTROL_STEP in self.callbacks:
-                self.callbacks[CallbackType.POST_CONTROL_STEP](control_step, self.model, self.data)
+            if is_control_step:
+                if CallbackType.POST_CONTROL_STEP in self.callbacks:
+                    self.callbacks[CallbackType.POST_CONTROL_STEP](control_step, self.model, self.data)
+
+                if self.options.ann_data_logging != ANNDataLogging.NONE:
+                    self.controller.actor_controller.log_ann_data()
 
             if not self.headless:
                 self.update_view(time)
+
+        if self.options.ann_data_logging != ANNDataLogging.NONE:
+            self.controller.actor_controller.stop_log_ann_data()
 
         if not self.headless:
             self.close_view()
