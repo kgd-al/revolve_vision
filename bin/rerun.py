@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 
 import argparse
+import builtins
 import json
 import logging
 import math
+import numbers
 import os
 import pprint
 import random
@@ -16,6 +18,7 @@ from typing import Dict, Optional
 import humanize
 from colorama import Fore, Style
 
+from abrain.core.genome import GIDManager
 from src.evolution.common import Individual
 from src.default_experiment.evaluator import Evaluator, EvalOptions
 from src.default_experiment.scenario import Scenario
@@ -106,7 +109,8 @@ class Options:
 
 def generate_defaults(args):
     rng = Random(0)
-    genome = RVGenome.random(rng)
+    id_manager = GIDManager()
+    genome = RVGenome.random(rng, id_manager)
     ind = Individual(genome)
 
     def_folder = Path("tmp/defaults/")
@@ -116,15 +120,11 @@ def generate_defaults(args):
     with open(ind_file, 'w') as f:
         json.dump(ind.to_json(), f)
 
-    Scenario.generate_initial_items(rng, 10)
-    env_file = args.env = def_folder.joinpath("env.json")
-    Scenario.serialize(env_file)
-
     cnf_file = args.config = def_folder.joinpath("config.json")
     Config.write_json(cnf_file)
 
     if args.verbosity > 0:
-        print("Generated default files", [ind_file, env_file, cnf_file])
+        print("Generated default files", [ind_file, cnf_file])
 
 
 def try_locate(base: Path, name: str, levels: int = 0, strict: bool = True):
@@ -154,9 +154,14 @@ def main() -> int:
     Options.populate(parser)
     parser.parse_args(namespace=args)
 
-    logging.basicConfig(level=logging.DEBUG)
+    if args.verbosity <= 0:
+        logging.basicConfig(level=logging.WARNING)
+    elif args.verbosity == 1:
+        logging.basicConfig(level=logging.INFO)
+    else:
+        logging.basicConfig(level=logging.DEBUG)
 
-    if args.verbosity >= 1:
+    if args.verbosity >= 2:
         print("Command line-arguments:")
         pprint.PrettyPrinter(indent=2, width=1).pprint(args.__dict__)
 
@@ -172,7 +177,13 @@ def main() -> int:
     options = EvalOptions()
     save_folder = False
 
-    if args.view:
+    if args.record:
+        save_folder = True
+        options.runner.record = RunnerOptions.Record(
+            video_file_path=args.robot.stem + ".movie.mp4",
+            width=args.width, height=args.height)
+
+    elif args.view:
         options.runner.view = RunnerOptions.View(
             start_paused=(not args.record and not args.auto_start),
             speed=args.speed,
@@ -181,12 +192,6 @@ def main() -> int:
             settings_save=args.settings_save,
             settings_restore=args.settings_restore,
         )
-
-    if args.record:
-        save_folder = True
-        options.runner.record = RunnerOptions.Record(
-            video_file_path=args.robot.stem + ".movie.mp4",
-            width=args.width, height=args.height)
 
     if args.save_ann:
         save_folder = True
@@ -213,14 +218,6 @@ def main() -> int:
     ind = Individual.from_file(args.robot)
     genome = ind.genome
 
-    if args.env is None:
-        args.env = try_locate(args.robot, "env.json")
-    try:
-        Scenario.deserialize(args.env)
-    except ValueError as e:
-        logging.error(f"Failed to load items: {e}")
-        Scenario.generate_initial_items(20)
-
     result, viewer = Evaluator.evaluate_rerun(genome, options)
 
     # ==========================================================================
@@ -229,10 +226,10 @@ def main() -> int:
     err = 0
 
     if args.perf_check and not defaults:
-        err = performance_compare(Evaluator.Result(ind.fitnesses, ind.stats), result, args.verbosity)
+        err = performance_compare(ind.evaluation_result(), result, args.verbosity)
 
     if options.runner.record is not None:
-        output = options.runner.record.video_file_path
+        output = options.runner.save_folder.joinpath(options.runner.record.video_file_path)
         if not os.path.exists(output):
             print(f"Failed to generate {output}")
             err |= 1
@@ -253,11 +250,17 @@ def main() -> int:
 
 
 def performance_compare(lhs: Evaluator.Result, rhs: Evaluator.Result, verbosity):
-    width = 10
+    width = 20
     key_width = max(len(k) for keys in [lhs.fitnesses, lhs.stats, rhs.fitnesses, rhs.stats] for k in keys) + 1
 
     def s_format(s=''): return f"{s:{width}}"
-    def f_format(f): return s_format(f"{f:g}")
+
+    def f_format(f):
+        if type(f) == builtins.list:
+            # return f"{f}"[:width-3] + "..."
+            return "\n" + pprint.pformat(f, width=width)
+        else:
+            return s_format(f"{f:g}")
 
     def map_compare(lhs_d: Dict[str, float], rhs_d: Dict[str, float]):
         output, code = "", 0
@@ -272,8 +275,19 @@ def performance_compare(lhs: Evaluator.Result, rhs: Evaluator.Result, verbosity)
                 output += f"{Fore.YELLOW}{f_format(lhs_v)} <"
             else:
                 if lhs_v != rhs_v:
-                    output += f"{Fore.RED}{f_format(lhs_v)} | {f_format(rhs_v)}\t" \
-                              f"({f_format(rhs_v-lhs_v)}, {100*(math.inf if lhs_v == 0 else rhs_v/lhs_v):.2f}%)"
+                    lhs_str, rhs_str = f_format(lhs_v), f_format(rhs_v)
+                    if isinstance(lhs_v, numbers.Number):
+                        output += f"{Fore.RED}{lhs_str} | {rhs_str}" \
+                                  f"\t({rhs_v-lhs_v}, {100*(math.inf if lhs_v == 0 else rhs_v/lhs_v):.2f}%)"
+                    else:
+                        output += "\n"
+                        for lhs_item, rhs_item in zip(lhs_str.split('\n'), rhs_str.split('\n')):
+                            if lhs_item != rhs_item:
+                                output += Fore.RED
+                            output += f"{lhs_item:{width}s} | {rhs_item:{width}s}"
+                            if lhs_item != rhs_item:
+                                output += Style.RESET_ALL
+                            output += "\n"
                     code = 1
                 else:
                     output += f"{Fore.GREEN}{f_format(lhs_v)}"
@@ -282,6 +296,7 @@ def performance_compare(lhs: Evaluator.Result, rhs: Evaluator.Result, verbosity)
         return output, code
 
     f_str, f_code = map_compare(lhs.fitnesses, rhs.fitnesses)
+    d_str, d_code = map_compare(lhs.descriptors, rhs.descriptors)
     s_str, s_code = map_compare(lhs.stats, rhs.stats)
     max_width = max(len(line) for text in [f_str, s_str] for line in text.split('\n'))
     if verbosity > 0:
@@ -290,11 +305,13 @@ def performance_compare(lhs: Evaluator.Result, rhs: Evaluator.Result, verbosity)
         header()
         print(f_str, end='')
         header()
+        print(d_str, end='')
+        header()
         print(s_str, end='')
         header()
         print()
 
-    return max(f_code, s_code)
+    return max([f_code, d_code, s_code])
 
 
 if __name__ == "__main__":

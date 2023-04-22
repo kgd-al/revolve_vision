@@ -1,10 +1,8 @@
 import logging
-import os
+import pprint
 from pathlib import Path
 from typing import List, Tuple, Optional
 
-import cv2
-import mujoco
 import numpy as np
 from mujoco import MjModel, MjData
 from revolve2.serialization import StaticData, Serializable
@@ -14,67 +12,10 @@ from abrain import Point, CPPN
 from revolve2.actor_controller import ActorController
 from revolve2.core.modular_robot import Brain, Body, ActiveHinge
 from revolve2.core.modular_robot.brains import BrainCpgNetworkNeighbour
+from .vision import OpenGLVision
 from ..misc.config import Config
 from ..misc.genome import RVGenome
 from ..simulation.runner import DefaultActorControl, ANNDataLogging
-
-
-# ==============================================================================
-# Vision (through offscreen OpenGL Rendering)
-# ==============================================================================
-
-class OpenGLVision:
-    max_width, max_height = 200, 200
-    context = None
-
-    def __init__(self, model: MjModel, shape: Tuple[int, int], headless: bool):
-        # if OpenGLVision.context is None and \
-        #         (runner.headless or Config.opengl_lib != Config.OpenGLLib.GLFW.name):
-        if OpenGLVision.context is None and headless:
-            match Config.opengl_lib.upper():
-                case Config.OpenGLLib.GLFW.name:  # Does not work in multithread
-                    from mujoco.glfw import GLContext
-
-                case Config.OpenGLLib.EGL.name:
-                    from mujoco.egl import GLContext
-                    os.environ['MUJOCO_GL'] = 'egl'
-                case Config.OpenGLLib.OSMESA.name:
-                    from mujoco.osmesa import GLContext
-                    os.environ['MUJOCO_GL'] = 'osmesa'
-                case _:
-                    raise ValueError(f"Unknown OpenGL backend {Config.opengl_lib}")
-            OpenGLVision.context = GLContext(self.max_width, self.max_height)
-            OpenGLVision.context.make_current()
-            logging.debug(f"Initialized {OpenGLVision.context=}")
-
-        w, h = shape
-        assert 0 < w <= self.max_width
-        assert 0 < h <= self.max_height
-
-        self.width, self.height = w, h
-        self.context = mujoco.MjrContext(model, mujoco.mjtFontScale.mjFONTSCALE_150.value)
-        self.viewport = mujoco.MjrRect(0, 0, w, h)
-
-        self.cam = mujoco.MjvCamera()
-        self.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
-        self.cam.fixedcamid = 1
-
-        self.vopt = mujoco.MjvOption()
-        self.scene = mujoco.MjvScene(model, maxgeom=10000)
-        self.pert = mujoco.MjvPerturb()
-
-        self.img = np.zeros((self.height, self.width, 3), dtype=np.uint8)
-
-    def process(self, model, data):
-        mujoco.mjv_updateScene(
-            model, data,
-            self.vopt, self.pert, self.cam, mujoco.mjtCatBit.mjCAT_ALL.value,
-            self.scene)
-        mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, self.context)
-        mujoco.mjr_render(self.viewport, self.scene, self.context)
-        mujoco.mjr_readPixels(self.img, None, self.viewport, self.context)
-
-        return self.img
 
 
 # ==============================================================================
@@ -94,11 +35,23 @@ class SensorControlData(DefaultActorControl):
 
 def retina_mapper():
     rc = Config.RetinaConfiguration
+    def debug_point(i, j, k, x, y, z):
+        p = Point(x, y, z)
+        print(f"[kgd-debug] {i=} {j=} {k=}, {x=:+5.3f} {y=:+5.3f} {z=:+5.3f}")
+        return p
     lut = {
+        rc.X: lambda i, j, k, w, h:
+            Point(2 * (w * k + i) / (3 * w - 1) - 1,
+                  -1 + .1,
+                  2 * j / (h-1) - 1),
         rc.Y: lambda i, j, k, w, h:
             Point(2 * i / (w-1) - 1,
                   -1 + (k+1) * .1,
-                  2 * j / (h-1) - 1)
+                  2 * j / (h-1) - 1),
+        rc.Z: lambda i, j, k, w, h:
+            Point(2 * i / (w - 1) - 1,
+                  -1 + .1,
+                  2 * (h * k + j) / (3 * h - 1) - 1),
     }
     return lut[Config.retina_configuration]
 
@@ -123,14 +76,20 @@ class ANNControl:
 
             if self.vision is not None:
                 img = self.vision.process(data.model, data.data)
+                self.i_buffer[off:] = [x / 255 for x in img.flat]
+
                 # cv2.imwrite(f'vision_{self._step:010d}.png',
                 #             cv2.cvtColor(np.flipud(img), cv2.COLOR_RGBA2BGR))
-
-                self.i_buffer[off:] = [x / 255 for x in img.flat]
+                # if self._step == 0:
+                #     print(img)
+                # header = f"step {self._step}"
+                # print(f"== {header} {'=' * (80 - len(header) - 4)}\n{img}")
 
             self._step += 1
 
             self.brain.__call__(self.i_buffer, self.o_buffer)
+
+            # pprint.pprint([n.value for n in self.brain.neurons()])
 
         def start_log_ann_data(self,
                                level: Optional[ANNDataLogging] = None,
@@ -184,12 +143,16 @@ class ANNControl:
 
             if bounds[0][2] != bounds[1][2]:
                 raise NotImplementedError("Can only handle planar robots (with z=0 for all modules)")
-            xrange = max(-bounds[0][0], bounds[1][0])
-            yrange = max(-bounds[0][1], bounds[1][1])
+            x_min, x_max = bounds[0][0], bounds[1][0]
+            xrange = max(x_max-x_min, 1)
+            y_min, y_max = bounds[0][1], bounds[1][1]
+            yrange = max(y_max-y_min, 1)
 
             hinges_map = {
-                c[0].id: (c[1].x / xrange, c[1].y / yrange) for c
-                in parsed_coords if isinstance(c[0], ActiveHinge)
+                c[0].id: (
+                    2 * (c[1].x - x_min) / xrange - 1 if xrange > 1 else 0,
+                    2 * (c[1].y - y_min) / yrange - 1 if yrange > 1 else 0)
+                for c in parsed_coords if isinstance(c[0], ActiveHinge)
             }
 
             inputs, outputs = [], []
@@ -198,9 +161,9 @@ class ANNControl:
 
             for i, did in enumerate(dof_ids):
                 p = hinges_map[did]
-                ip = Point(p[0], -1, p[1])
+                ip = Point(p[1], -1, p[0])
                 inputs.append(ip)
-                op = Point(p[0], 1, p[1])
+                op = Point(p[1], 1, p[0])
                 outputs.append(op)
 
                 if self.with_labels:
@@ -220,7 +183,17 @@ class ANNControl:
                                 labels[p] = f"{c}[{i},{j}]"
 
             # Ensure no duplicates
-            assert all(len(set(io_)) == len(io_) for io_ in [inputs, outputs])
+            try:
+                # assert all(len(set(io_)) == len(io_) for io_ in [inputs, outputs])
+                assert len({p for io in [inputs, outputs] for p in io}) \
+                       == (len(inputs)+len(outputs))
+            except AssertionError as e:
+                duplicates = {}
+                for io in [inputs, outputs]:
+                    for p in io:
+                        duplicates[p] = duplicates.get(p, 0) + 1
+                duplicates = {k: v for k, v in duplicates.items() if v > 1}
+                raise ValueError(f"Found duplicates: {pprint.pformat(duplicates)}") from e
 
             c = ANNControl.Controller(self.brain_dna.brain, inputs, outputs)
 

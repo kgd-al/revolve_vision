@@ -4,5 +4,12 @@ import subprocess
 import pprint
 import sys
 
-output = json.loads(subprocess.check_output(executable='jq', args=sys.argv[1:], shell=True))
-pprint.pprint(output)
+output = subprocess.check_output(
+    executable='jq', args=["-c"]+sys.argv[1:],
+    shell=True, universal_newlines=True)
+for row in output.split('\n'):
+    try:
+        j_row = json.loads(row)
+        pprint.pprint(j_row)
+    except:
+        print(row)

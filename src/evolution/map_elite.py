@@ -51,7 +51,7 @@ class Algorithm(Evolution):
     def __init__(self, container: Container, options, labels, **kwargs):
         # Manage run id, seed, data folder...
         normalize_run_parameters(options)
-        name = f"ID{options.seed}"
+        name = options.id
 
         self.rng = Random(options.seed)
         random.seed(options.seed)

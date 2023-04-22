@@ -24,6 +24,7 @@ from revolve2.core.physics.running import Environment
 from revolve2.core.physics.running import PosedActor, ActorControl
 from revolve2.runners.mujoco import LocalRunner
 from revolve2.runners.mujoco._local_runner import mjcf
+from .vision import OpenGLVision
 from ..misc.config import Config
 
 
@@ -138,7 +139,7 @@ class Runner(LocalRunner):
         ]
         LocalRunner._set_dof_targets(self.data, initial_targets)
 
-        self.viewer = None
+        self.viewer: Optional[mujoco_viewer.MujocoViewer] = None
         self.video = None
         self.headless = options is None or (options.view is None and options.record is None)
         if not self.headless:
@@ -146,54 +147,69 @@ class Runner(LocalRunner):
 
     def prepare_view(self, options):
         record = (options.record is not None)
-        width = height = None
         if record:
-            width, height = options.record.width, options.record.height
+            self._prepare_video(options)
+        else:
+            self._prepare_viewer(options)
+        self._prepare_camera(record, options)
+
+    def _prepare_camera(self, record, options):
+        cam_id = -1
+        if record:
+            cam_id = 0
+        elif options.view is not None and options.view.cam_id is not None:
+            cam_id = options.view.cam_id
+        if cam_id != -1 and self.viewer is not None:
+            self.viewer.cam.fixedcamid = cam_id
+            self.viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+
+    def _prepare_viewer(self, options):
+        print("Preparing view with opengl lib", Config.opengl_lib)
+        glfw_window_hint = {
+            Config.OpenGLLib.OSMESA.name: glfw.OSMESA_CONTEXT_API,
+            Config.OpenGLLib.EGL.name: glfw.EGL_CONTEXT_API
+        }
+        if (ogl := Config.opengl_lib.upper()) in glfw_window_hint:
+            glfw.window_hint(glfw.CONTEXT_CREATION_API, glfw_window_hint[ogl])
+            print("Requested:", ogl)
+
+        width = height = None
 
         viewer = mujoco_viewer.MujocoViewer(
             self.model,
             self.data,
-            'offscreen' if record else 'window',
+            'window',
             width=width, height=height,
         )
         viewer._render_every_frame = False  # Private but functionality is not exposed and for now it breaks nothing.
-        viewer._paused = False if record else options.view.start_paused
+        viewer._paused = options.view.start_paused
 
-        if record:
-            self.video = namedtuple('Video', ['step', 'writer', 'last'])
-            self.video.step = 1 / options.record.fps
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            size = (viewer.viewport.width, viewer.viewport.height)
-            self.video.writer = cv2.VideoWriter(
-                str(options.record.video_file_path),
-                fourcc=fourcc,
-                fps=options.record.fps,
-                frameSize=size
-            )
-            self.video.last = 0.0
-
-            viewer._hide_menu = True
-
-        else:
-            viewer._run_speed = options.view.speed
-
-        cam_id = -1
-        if options.view is not None and options.view.cam_id is not None:
-            cam_id = options.view.cam_id
-        elif record:
-            cam_id = 0
-        if cam_id != -1:
-            viewer.cam.fixedcamid = cam_id
-            viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+        viewer._run_speed = options.view.speed
 
         self.viewer = viewer
 
-        if self.options.view is not None:
-            if self.options.view.settings_restore:
-                self.restore_settings()
-            if self.options.view.settings_save:
-                glfw.set_window_close_callback(viewer.window,
-                                               lambda _: self.save_settings())
+        self.viewer.cam.lookat = self.get_actor_state(0).position
+
+        if self.options.view.settings_restore:
+            self.restore_settings()
+        if self.options.view.settings_save:
+            glfw.set_window_close_callback(viewer.window,
+                                           lambda _: self.save_settings())
+
+    def _prepare_video(self, options):
+        self.video = namedtuple('Video', ['step', 'writer', 'last'])
+        self.video.step = 1 / options.record.fps
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        size = (options.record.width, options.record.height)
+        self.video.writer = cv2.VideoWriter(
+            str(options.save_folder.joinpath(options.record.video_file_path)),
+            fourcc=fourcc,
+            fps=options.record.fps,
+            frameSize=size
+        )
+        self.video.last = 0.0
+
+        self.viewer = OpenGLVision(model=self.model, shape=size)
 
     @staticmethod
     def _config_file():
@@ -214,6 +230,8 @@ class Runner(LocalRunner):
                                     *literal_eval(values['pos']))
             if 'menu' in values:
                 self.viewer._hide_menus = (values['menu'] == "False")
+            if 'speed' in values:
+                self.viewer._run_speed = float(values['speed'])
 
     def save_settings(self):
         config = ConfigParser()
@@ -222,6 +240,7 @@ class Runner(LocalRunner):
         values['pos'] = str(glfw.get_window_pos(self.viewer.window))
         values['size'] = str(glfw.get_window_size(self.viewer.window))
         values['menu'] = str(not self.viewer._hide_menus)
+        values['speed'] = str(self.viewer._run_speed)
         path = Path(self._config_file())
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -236,7 +255,9 @@ class Runner(LocalRunner):
         if self.video is not None and time >= self.video.last + self.video.step:
             self.video.last = int(time / self.video.step) * self.video.step
 
-            frame = cv2.cvtColor(self.viewer.read_pixels(), cv2.COLOR_RGBA2BGR)
+            frame = cv2.cvtColor(
+                np.flipud(self.viewer.process(self.model, self.data)),
+                cv2.COLOR_RGBA2BGR)
 
             flag = CallbackType.VIDEO_FRAME_CAPTURED
             if flag in self.callbacks:

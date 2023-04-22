@@ -141,6 +141,20 @@ If using a viewer for OpenGL rendering, you will probably be faced with incompat
 backends. The default dependency for Revolve2 (`mujoco-python-viewer`) uses glfw out of
 the box. 
 
+It is theoretically possible to delegate rendering to another back-end:
+```
+glfw_window_hint = {
+    Config.OpenGLLib.OSMESA.name: glfw.OSMESA_CONTEXT_API,
+    Config.OpenGLLib.EGL.name: glfw.EGL_CONTEXT_API
+}
+if (ogl := Config.opengl_lib.upper()) in glfw_window_hint:
+    glfw.window_hint(glfw.CONTEXT_CREATION_API, glfw_window_hint[ogl])
+```
+
+However, this does not guarantee byte-wise identical results. In fact, there
+does not seem to be much difference between using a different context creator
+and the regular glfw (besides the fact that osmesa fails spectacularly to work).
+
 ## #. Miscellaneous
 
 Random notes:
@@ -154,3 +168,5 @@ Current rule of thumb:
 Use egl for headless situations and glfw (delegating to egl) for movie/viewer.
 However, this requires access to a GPU (acceptable in this lab
 because of the rippers configuration but might not hold outside or for students)
+
+Seems I have done almost the same as https://github.com/deepmind/dm_control/blob/main/dm_control/mujoco/engine.py

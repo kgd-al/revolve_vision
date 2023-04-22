@@ -1,17 +1,16 @@
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 import abrain
 from abrain.core.ann import plotly_render
-from revolve2.core.physics.environment_actor_controller import EnvironmentActorController
-from ..simulation.control import OpenGLVision
 from .scenario import build_robot, Scenario
-from ..evolution.common import Individual
+from ..evolution.common import EvaluationResult
 from ..misc.genome import RVGenome
-from ..misc.config import Config
-from ..simulation.runner import Runner, RunnerOptions, CallbackType, ANNDataLogging
+from ..simulation.control import OpenGLVision
+from ..simulation.runner import Runner, RunnerOptions, CallbackType, \
+    ANNDataLogging
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +23,17 @@ class EvalOptions:
 
 
 class Evaluator:
-    options: Optional[EvalOptions] = None
+    options = EvalOptions()
 
     @classmethod
     def set_runner_options(cls, options: RunnerOptions):
-        cls.options = options
+        cls.options.runner = options
 
     @dataclass
-    class Result:
-        fitnesses: Individual.DataCollection = field(default_factory=dict)
-        descriptors: Individual.DataCollection = field(default_factory=dict)
-        stats: Individual.DataCollection = field(default_factory=dict)
+    class Result(EvaluationResult):
+        # fitnesses: Individual.DataCollection = field(default_factory=dict)
+        # descriptors: Individual.DataCollection = field(default_factory=dict)
+        # stats: Individual.DataCollection = field(default_factory=dict)
         reject: bool = False
 
     @staticmethod
@@ -55,10 +54,6 @@ class Evaluator:
                        or options.runner.ann_data_logging != ANNDataLogging.NONE)
 
         robot = build_robot(genome, with_labels)
-        is_abrain = (Config.brain_type == abrain.ANN.__name__)
-        if not is_abrain:
-            # Default CPG does not use external (sensor) data -> use default controller
-            Runner.environmentActorController_t = EnvironmentActorController
 
         runner = Runner(robot, options.runner, Scenario.amend,
                         position=Scenario.initial_position())
@@ -71,13 +66,11 @@ class Evaluator:
             runner.callbacks[CallbackType.VIDEO_FRAME_CAPTURED] = scenario.process_video_frame
 
         r.reject = False
-        assert is_abrain
         brain_controller = runner.controller.actor_controller
-        if is_abrain:
-            brain: abrain.ANN = brain_controller.brain
-            r.reject |= (brain.empty())
+        brain: abrain.ANN = brain_controller.brain
+        r.reject |= (brain.empty())
 
-        if hasattr(genome, 'vision'):
+        if genome.with_vision():
             brain_controller.vision = \
                 OpenGLVision(runner.model, genome.vision, runner.headless)
 
@@ -97,24 +90,19 @@ class Evaluator:
         r.descriptors = cls._clip(scenario.descriptors(), scenario.descriptor_bounds(),
                                   "features")
 
-        r.stats = {}
-        if is_abrain:
+        r.stats = brain.stats().dict()
+        r.stats.update({
+            'brain': float(not brain.empty()),
+            'perceptron': float(brain.perceptron()),
+            'neurons': len(brain.neurons()),
+        })
+
+        if brain_controller.vision is not None:
             r.stats.update({
-                'brain': float(not brain.empty()),
-                'perceptron': float(brain.perceptron()),
-                'hidden': brain.stats().hidden,
-                'neurons': len(brain.neurons()),
-                'edges': brain.stats().edges,
-                'depth': brain.stats().depth,
+                'vision': brain_controller.vision.img.tolist()
             })
 
-        if False:
-            r.stats.update({
-                'apple': scenario.collected[str(CollectibleType.Apple)],
-                'pepr': -scenario.collected[str(CollectibleType.Pepper)],
-            })
-
-        # print(f"Evaluated\n {pprint.pformat(genome.to_json())}\n {pprint.pformat(r)}\n")
+        r.stats['items'] = scenario.collected
 
         if rerun:
             return r, viewer

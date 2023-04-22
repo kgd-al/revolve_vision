@@ -5,12 +5,28 @@ from typing import Optional
 
 from abrain import Genome as ANNGenome
 from abrain.core.genome import GIDManager
+from .config import Config
 
 
 @dataclass
 class VisionData:
     w: int = 3
     h: int = 2
+
+    @staticmethod
+    def random(rng: Random):
+        return VisionData()
+
+    def mutate(self, rng: Random):
+        f, field, bounds = rng.choice([("w", self.w, Config.vision_mutation_range[0]),
+                                       ("h", self.h, Config.vision_mutation_range[1])])
+        if field == bounds[0]:
+            field += 1
+        elif field == bounds[1]:
+            field -= 1
+        else:
+            field += rng.choice([-1, 1])
+        setattr(self, f, field)
 
     def __iter__(self):
         return iter(astuple(self))
@@ -33,25 +49,31 @@ class RVGenome:
         return self.brain.parents()
 
     def __repr__(self):
-        str_ = ""
         if self.with_vision():
-            str_ += str(self.vision) + "-"
-        return str_ + str(self.brain)
+            return f"{{{str(self.vision)}, {str(self.brain)}}}"
+        else:
+            return str(self.brain)
 
     def mutate(self, rng: Random) -> None:
-        self.brain.mutate(rng)  ## TODO Add mutable vision
+        if self.with_vision() and rng.random() < Config.vision_mutation_rate:
+            self.vision.mutate(rng)
+        else:
+            self.brain.mutate(rng)
 
     def mutated(self, rng: Random, id_manager: GIDManager):
-        return RVGenome(self.brain.mutated(rng, id_manager), self.vision)
+        clone = self.copy()
+        clone.mutate(rng)
+        clone.brain.update_lineage(id_manager, [self.brain])
+        return clone
 
     @staticmethod
     def random(rng: Random, id_manager: GIDManager) -> 'RVGenome':
         return RVGenome(
             ANNGenome.random(rng, id_manager),
-            VisionData.random(rng)
+            VisionData.random(rng) if Config.with_vision else None
         )
 
-    def copy(self) -> 'Genome':
+    def copy(self) -> 'RVGenome':
         return RVGenome(
             self.brain.copy(),
             copy.deepcopy(self.vision)
@@ -64,14 +86,19 @@ class RVGenome:
         return self.copy()
 
     def __getstate__(self):
-        return dict(brain=self.brain.__getstate__(), vision=self.vision.__dict__)
+        return dict(brain=self.brain, vision=self.vision)
 
     def __setstate__(self, state):
-        self.brain.__setstate__(state["brain"])
-        self.vision.__dict__.update(state["vision"])
+        self.__dict__ = state
+        assert isinstance(self.brain, ANNGenome)
+        if self.vision is not None:
+            assert isinstance(self.vision, VisionData)
 
     def to_json(self):
-        return dict(brain=self.brain.to_json(), vision=self.vision.__dict__)
+        if self.vision is None:
+            return self.brain.to_json()
+        else:
+            return dict(brain=self.brain.to_json(), vision=self.vision.__dict__)
 
     @staticmethod
     def from_json(data) -> 'RVGenome':

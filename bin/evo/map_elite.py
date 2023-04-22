@@ -14,7 +14,6 @@ from typing import Optional
 import humanize
 from qdpy.base import ParallelismManager
 
-import abrain
 from abrain.core.genome import logger as genome_logger
 from src.default_experiment.evaluator import Evaluator
 from src.default_experiment.scenario import Scenario
@@ -40,11 +39,7 @@ class Options:
         self.tournament: int = 5
         self.threads: int = 1
 
-        self.items: int = 10
-
-        self.brain: str = abrain.ANN.__name__
-
-        # number of initial mutations for body and brain CPPNWIN networks
+        # number of initial mutations for abrain's genome
         self.initial_mutations: int = 10
 
     @staticmethod
@@ -82,15 +77,9 @@ class Options:
                            metavar='N', type=int,
                            help="Mutations for the initial population")
 
-        group = parser.add_argument_group("Environment",
-                                          "Environmental parameters")
-        group.add_argument('--env-items', dest="items", metavar='N', type=int,
-                           help="Number of items in the environment")
+        # group = parser.add_argument_group("Environment", "Environmental parameters")
 
-        group = parser.add_argument_group("Robot",
-                                          "Robot parameters")
-        group.add_argument('--brain-type', dest="brain", metavar='B', type=str,
-                           help="Brain type to use", choices=Config.brain_types)
+        # group = parser.add_argument_group("Robot", "Robot parameters")
 
         Config.argparse_setup(parser)
 
@@ -114,6 +103,8 @@ def main():
     Options.populate(parser)
     parser.parse_args(namespace=args)
 
+    # =========================================================================
+
     # Log everything to file except for the progress bar
     tee = Tee(filter_out=lambda msg: "\r" in msg or "\x1b" in msg)
     tee.register()  # Start capturing now (including logging's reference to stdout)
@@ -124,10 +115,17 @@ def main():
         stream=sys.stdout
     )
     genome_logger.setLevel(logging.INFO)
-    logging.getLogger('matplotlib').setLevel(logging.CRITICAL)
+
+    for m in ['matplotlib', 'OpenGL.arrays.arraydatatype', 'OpenGL.acceleratesupport']:
+        logger = logging.getLogger(m)
+        logger.setLevel(logging.WARNING)
+        logging.info(f"Muting {logger}")
+
     logging.captureWarnings(True)
 
-    grid = Grid(shape=(32, 32),
+    # =========================================================================
+
+    grid = Grid(shape=(16, 16),
                 max_items_per_bin=1,
                 fitness_domain=Scenario.fitness_bounds(),
                 features_domain=Scenario.descriptor_bounds())
@@ -142,16 +140,12 @@ def main():
 
     # Prepare (and store) configuration
     Config.argparse_process(args)
-    Config.brain_type = args.brain
     Config.evolution = args.__dict__
     Config._evolving = True
 
     config_path = run_folder.joinpath("config.json")
     Config.write_json(config_path)
     logging.info(f"Stored configuration in {config_path.absolute()}")
-
-    Scenario.generate_initial_items(algo.rng, args.items)
-    Scenario.serialize(run_folder.joinpath("env.json"))
 
     # Create a logger to pretty-print everything and generate output data files
     save_every = round(args.budget / (args.batch_size * args.snapshots))
@@ -170,8 +164,8 @@ def main():
         with open(run_folder.joinpath("best.json"), 'w') as f:
             data = {
                 "id": best.id(), "parents": best.genome.parents(),
-                "fitnesses": {"speed": best.fitness.values[0]},
-                "descriptors": best.features.values,
+                "fitnesses": best.fitnesses,
+                "descriptors": best.descriptors,
                 "stats": best.stats,
                 "genome": best.genome.to_json()
             }

@@ -98,8 +98,10 @@ def normalize_run_parameters(options: NamedTuple):
         logging.info(f"Deduced seed: {options.seed}")
 
     # Define the run folder
-    options.run_folder = \
-        os.path.normpath(f"{options.base_folder}/run{options.id}/")
+    folder_name = options.id
+    if not isinstance(folder_name, str):
+        folder_name = f"run{options.id}"
+    options.run_folder = os.path.normpath(f"{options.base_folder}/{folder_name}/")
     logging.info(f"Run folder: {options.run_folder}")
 
     # Check the thread parameter
@@ -115,7 +117,7 @@ def normalize_run_parameters(options: NamedTuple):
 class EvaluationResult:
     DataCollection = Dict[str, float]
     fitnesses: DataCollection = field(default_factory=dict)
-    descriptors: DataCollection = field(default_factory=list)
+    descriptors: DataCollection = field(default_factory=dict)
     stats: DataCollection = field(default_factory=dict)
 
 
@@ -141,12 +143,19 @@ class Individual:
         return not self == other
 
     def __repr__(self):
-        return f"{{id={self.id()}, fitness={self.fitness}, features={self.features}}}"
+        return f"{{id={self.id()}, fitness={self.fitnesses}, features={self.descriptors}}}"
 
     def update(self, r: EvaluationResult):
         self.fitnesses = r.fitnesses
         self.descriptors = r.descriptors
         self.stats = r.stats
+
+    def evaluation_result(self) -> EvaluationResult:
+        return EvaluationResult(
+            fitnesses=self.fitnesses,
+            descriptors=self.descriptors,
+            stats=self.stats,
+        )
 
     def to_json(self):
         dct = dataclasses.asdict(self)

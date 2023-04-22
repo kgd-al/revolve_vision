@@ -1,40 +1,72 @@
 import json
 import logging
 import math
-import os
+import pprint
 from dataclasses import dataclass
-from enum import Enum, auto
+from enum import Enum
+from functools import lru_cache
 from pathlib import Path
 from random import Random
 from typing import Optional, List, Dict
 
 import cv2
-import mujoco
 import numpy as np
 from mujoco import MjData, MjModel
+from pyrr import Vector3
 
-import abrain
-from revolve2.core.modular_robot import Body, Brick, ActiveHinge, ModularRobot
+from revolve2.core.modular_robot import Body, Brick, ActiveHinge, ModularRobot, Module
 from ..misc.config import Config
-from ..simulation.control import ANNControl, SensorControlData, CPGControl
+from ..simulation.control import ANNControl, SensorControlData
 from ..simulation.runner import Runner, RunnerOptions
-
 
 # ==============================================================================
 # Robots
 # ==============================================================================
 
 def default_body() -> Body:
+    BT = Config.BodyType
+    b_type = Config.body_type  #BT.SNAKE
+
+    def add_arms(m: Module):
+        m.left = ActiveHinge(math.pi / 2.0)
+        m.left.attachment = ActiveHinge(math.pi / 2.0)
+        m.left.attachment.attachment = Brick(0.0)
+        m.right = ActiveHinge(math.pi / 2.0)
+        m.right.attachment = ActiveHinge(math.pi / 2.0)
+        m.right.attachment.attachment = Brick(0.0)
+
     body = Body()
-    body.core.front = Brick(0.0)
-    body.core.back = Brick(0.0)
-    for segment in [body.core.front, body.core.back]:
-        segment.left = ActiveHinge(math.pi / 2.0)
-        segment.left.attachment = ActiveHinge(math.pi / 2.0)
-        segment.left.attachment.attachment = Brick(0.0)
-        segment.right = ActiveHinge(math.pi / 2.0)
-        segment.right.attachment = ActiveHinge(math.pi / 2.0)
-        segment.right.attachment.attachment = Brick(0.0)
+    if b_type == BT.GECKO:
+        body.core.front = Brick(0.0)
+        body.core.back = Brick(0.0)
+        for side in ['front', 'back']:
+            brick = Brick(0.0)
+            setattr(body.core, side, brick)
+            add_arms(brick)
+
+    elif b_type == BT.TORSO:
+        for segment in [body.core]:
+            add_arms(segment)
+        body.core.back = Brick(0.0)
+
+    elif b_type == BT.SPIDER:
+        body.core.front = Brick(0.0)
+        body.core.back = Brick(0.0)
+        for side in ['front', 'right', 'back', 'left']:
+            hinge = ActiveHinge(math.pi / 2.0)
+            setattr(body.core, side, hinge)
+            hinge.attachment = ActiveHinge(math.pi / 2.0)
+            hinge.attachment.attachment = Brick(0.0)
+
+    elif b_type == BT.SNAKE:
+        body.core.back = ActiveHinge(math.pi / 2.0)
+        current = body.core.back
+        for i in range(9):
+            current.attachment = ActiveHinge(0)#math.pi / 2.0)
+            current = current.attachment
+    else:
+        raise ValueError(f"Unknown body type {b_type}")
+
     body.finalize()
     return body
 
@@ -46,12 +78,7 @@ Runner.actorController_t = SensorControlData
 
 
 def build_robot(brain_dna, with_labels):
-    if Config.brain_type == abrain.ANN.__name__:
-        brain = ANNControl.Brain(brain_dna, with_labels)
-    else:
-        brain = CPGControl.Brain(brain_dna)
-    robot = ModularRobot(default_body(), brain)
-    return robot
+    return ModularRobot(default_body(), ANNControl.Brain(brain_dna, with_labels))
 
 
 # ==============================================================================
@@ -84,6 +111,9 @@ class CollectibleObject:
     x: float = 0
     y: float = 0
     type: CollectibleType = CollectibleType.Apple
+    lvl: float = 0
+
+    def __repr__(self): return f"{self.type.name:6s} {self.x:+.2f} {self.y:+.2f} {self.lvl}"
 
 
 # ==============================================================================
@@ -101,15 +131,11 @@ class Scenario:
     def __init__(self, runner: Runner, run_id: Optional[int] = None):
         self.runner = runner
         self.id = run_id
-        self.collected = {str(e): 0 for e in CollectibleType}
+        self.collected = []
         self._initial_position = self.subject_position()
         self._prev_position = self._initial_position
         self._steps = 0
         self._speed = 0
-
-    @staticmethod
-    def initial_position():
-        return [0, 0, 0]
 
     def subject_position(self):
         return self.runner.get_actor_state(0).position
@@ -132,7 +158,7 @@ class Scenario:
                 t_id = tokens[0]
                 b_id = int(tokens[1])
                 mj_data.mocap_pos[b_id][2] = -.25
-                self.collected[t_id] += self._rewards[t_id]
+                self.collected.append(self._fitness(t_id, float(tokens[2])))
 
         p0 = self._prev_position
         p1 = self.subject_position()
@@ -142,51 +168,127 @@ class Scenario:
         self._steps += 1
 
     def process_video_frame(self, frame: np.ndarray):
-        ratio = .25
-        w, h, _ = frame.shape
-        raw_vision = self._vision.img
-        vision_ratio = raw_vision.shape[0] / raw_vision.shape[1]
-        iw, ih = int(ratio * w), int(ratio * h * vision_ratio)
-        scaled_vision = cv2.resize(
-            cv2.cvtColor(np.flipud(raw_vision), cv2.COLOR_RGBA2BGR),
-            (iw, ih),
-            interpolation=cv2.INTER_NEAREST
-        )
-        frame[h-ih:h, w-iw:w] = scaled_vision
+        if (v := self.runner.controller.actor_controller.vision) is not None:
+            ratio = .25
+            w, h, _ = frame.shape
+            raw_vision = v.img
+            vision_ratio = raw_vision.shape[0] / raw_vision.shape[1]
+            iw, ih = int(ratio * w), int(ratio * h * vision_ratio)
+            scaled_vision = cv2.resize(
+                cv2.cvtColor(np.flipud(raw_vision), cv2.COLOR_RGBA2BGR),
+                (iw, ih),
+                interpolation=cv2.INTER_NEAREST
+            )
+            frame[h-ih:h, w-iw:w] = scaled_vision
+
+    # ==========================================================================
+
+    @staticmethod
+    def initial_position():
+        # return [0, 0, 0]
+        return [-2, 0, 0]
 
     # ==========================================================================
 
     @staticmethod
     def fitness_name():
-        return "speed"
+        return "collect"
+
+    @classmethod
+    def _fitness(cls, c_type: str, c_level: float):
+        return cls._rewards[c_type] * (1 + c_level)
 
     def fitness(self) -> Dict[str, float]:
-        score = 0
-        if self._steps > 0:
-            score += 100 * self._speed / self._steps
-        # score += sum([t for t in self.collected.values()])
+        score = sum(self.collected)
+
+        s_pos: Vector3 = self.subject_position()
+        dists = []
+        model = self.runner.model
+        srm_names: bytes = model.names
+        for i in range(model.nbody):
+            addr = model.name_bodyadr[i]
+            ln = srm_names.find(b'\0', addr)
+            name = srm_names[addr:ln].decode('ascii')
+            if CollectibleType.Apple.name not in name:
+                continue
+            b_pos = Vector3(model.body(name).pos)
+            if b_pos.z < 0:  # Already collected
+                continue
+            dists.append((s_pos - b_pos).length)
+
+        if len(dists) > 0:  # Still more to collect
+            score += .1 * (1-min(dists) / math.sqrt(2*Config.ground_size))
+
         return {self.fitness_name(): score}
 
     @classmethod
+    @lru_cache(maxsize=1)
     def fitness_bounds(cls):
-        return [(0, 2)]
+        items = cls._generate_items()
+        min_max = [0, 0]
+        for item in items:
+            f = cls._fitness(str(item.type), item.lvl)
+            min_max[int(f > 0)] += f
+        logging.debug(f"Computed fitness range as {min_max}")
+        assert min_max[0] < min_max[1]
+
+        return [tuple(min_max)]
+
+    # ==========================================================================
+
+    # @staticmethod
+    # def fitness_name():
+    #     return "speed"
+    #
+    # def fitness(self) -> Dict[str, float]:
+    #     score = 0
+    #     if self._steps > 0:
+    #         score += 100 * self._speed / self._steps
+    #     # score += sum([t for t in self.collected.values()])
+    #     return {self.fitness_name(): score}
+    #
+    # @classmethod
+    # def fitness_bounds(cls):
+    #     return [(0, 2)]
 
     # ==========================================================================
 
     @staticmethod
     def descriptor_names():
-        return ["x", "y"]
+        return ["depth", "vision"]
 
     def descriptors(self) -> Dict[str, float]:
-        # random = Random()
-        # return [random.uniform(-2, 2) for _ in range(2)]
-        return {"x": self.subject_position()[0],
-                "y": self.subject_position()[1]}
+        controller = self.runner.controller.actor_controller
+        v = math.sqrt(controller.vision.width * controller.vision.height)
+        y = np.clip(self.subject_position()[1], *self.descriptor_bounds()[0])
+        return {"y": y, "vision": v}
 
-    @staticmethod
-    def descriptor_bounds():
-        w = Config.ground_size / 2
-        return [(-w, w), (-w, w)]
+    @classmethod
+    @lru_cache(maxsize=1)
+    def descriptor_bounds(cls):
+        ys = [item.y for item in cls._generate_items()]
+        min_max = (min(ys), max(ys))
+        logging.debug(f"Computed y range as {min_max}")
+        assert min_max[0] < min_max[1]
+
+        return [min_max, (2, 10)]
+
+    # ==========================================================================
+    #
+    # @staticmethod
+    # def descriptor_names():
+    #     return ["x", "y"]
+    #
+    # def descriptors(self) -> Dict[str, float]:
+    #     # random = Random()
+    #     # return [random.uniform(-2, 2) for _ in range(2)]
+    #     return {"x": self.subject_position()[0],
+    #             "y": self.subject_position()[1]}
+    #
+    # @staticmethod
+    # def descriptor_bounds():
+    #     w = Config.ground_size / 2
+    #     return [(-w, w), (-w, w)]
 
     # ==========================================================================
     #
@@ -200,13 +302,14 @@ class Scenario:
     # @staticmethod
     # def descriptor_bounds(): return [(0.0, .5), (-90.0, 90.0)]
     #
-    # # ==========================================================================
+    # ==========================================================================
 
     @staticmethod
     def sunflower(n: int, r_range) -> np.ndarray:
+        phase = np.pi#np.pi/4
         # Generate the angles. The factor k_theta corresponds to 2*pi/phi^2.
         k_theta = np.pi * (3 - np.sqrt(5))
-        angles = np.linspace(k_theta, k_theta * n, n)
+        angles = phase + np.linspace(k_theta, k_theta * n, n)
 
         r_min, r_max = r_range
         radii = np.sqrt(np.linspace(0, 1, n)) * (r_max - r_min) + r_min
@@ -214,49 +317,54 @@ class Scenario:
         # Return Cartesian coordinates from polar ones.
         return (radii * np.stack((np.cos(angles), np.sin(angles)))).T
 
-    @staticmethod
-    def generate_initial_items(count=20, r_range=(.5, 1)):
+    @classmethod
+    @lru_cache(maxsize=1)
+    def _generate_items(cls):
         items = []
-        # count=512
-        # r_range=(.5,2)
+        count = Config.item_count
+        r_range = (0, 2)
+        dx, dy = .5, 0
 
+        items_dict = {k: [] for k in CollectibleType}
         if count > 0:
             coordinates = Scenario.sunflower(count, r_range)
-            for ix, iy in coordinates:
-                items.append(
-                    CollectibleObject(ix, iy, list(CollectibleType)[len(items) % 2]))
+            for i, (ix, iy) in enumerate(coordinates):
+                item = CollectibleObject(ix+dx, iy+dy, list(CollectibleType)[i % 2])
+                items.append(item)
+                items_dict[item.type].append(item)
 
-        Scenario._items = items
+        checker = dict()
+        p0 = cls.initial_position()
+        levels = Config.item_levels
+        for ct in CollectibleType:
+            ct_items = sorted(items_dict[ct], key=lambda itm: math.sqrt((p0[0] - itm.x)**2 + (p0[1] - itm.y)**2))
+            for i, item in enumerate(ct_items):
+                item.lvl = levels[int(len(levels) * i / len(ct_items))]
 
-    @staticmethod
-    def mutate_items(rng: Random):
-        raise NotImplementedError
+                key = (item.type, item.lvl)
+                checker[key] = checker.get(key, 0) + 1
 
-    @staticmethod
-    def serialize(path: Path):
-        with open(path, 'w') as f:
-            json.dump([(i.x, i.y, i.type.value) for i in Scenario._items], f)
+        balanced = (len(set(checker.values())) == 1)
+        if not balanced:
+            dct = {v: [] for v in checker.values()}
+            for k, v in checker.items():
+                dct[v].append(k)
+            assert balanced, f"Unbalanced items generation:\n{pprint.pformat(dct)}"
 
-    @staticmethod
-    def deserialize(path: Path):
-        with open(path, 'r') as f:
-            Scenario._items = [
-                CollectibleObject(i[0], i[1], CollectibleType(i[2])) for i in json.load(f)
-            ]
+        logging.debug(f"Generated items: {pprint.pformat(items)}")
+
+        return items
 
     # ==========================================================================
 
     @staticmethod
     def amend(xml, options: RunnerOptions):
-        item_distinction = 1    # float(os.environ.get("separation", 1))
-
         robots = [r for r in xml.worldbody.body]
 
         xml.visual.map.znear = ".001"
 
         # Reference to the ground
-        ground = next(item for item in xml.worldbody.geom
-                      if item.name == "ground")
+        ground = next(item for item in xml.worldbody.geom if item.name == "ground")
         g_size = Config.ground_size
         gh_size = .5 * g_size
 
@@ -281,23 +389,28 @@ class Scenario:
                       width=512, height=512,
                       mark="random", markrgb="1 1 1")
 
-        # Funny but not currently relevant
-        ts, rnd = 8, item_distinction
-        xml.asset.add('texture', name=f"txt{CollectibleType.Apple.name}",
-                      type="cube", builtin="flat",
-                      rgb1="0 1 0", rgb2="0 1 0", width=ts, height=ts,
-                      mark="random", markrgb="1 0 0", random=rnd)
-        xml.asset.add('material', name=f"mat{CollectibleType.Apple.name}",
-                      texture=f"txt{CollectibleType.Apple.name}",
-                      texrepeat="1 1", texuniform="true", reflectance="0")
-        xml.asset.add('texture', name=f"txt{CollectibleType.Pepper.name}",
-                      type="cube", builtin="flat",
-                      rgb1="1 0 0", rgb2="1 0 0", width=ts, height=ts,
-                      mark="random", markrgb="0 1 0", random=rnd)
-        xml.asset.add('material',
-                      name=f"mat{CollectibleType.Pepper.name}",
-                      texture=f"txt{CollectibleType.Pepper.name}",
-                      texrepeat="1 1", texuniform="true", reflectance="0")
+        # different textures for the objects
+        materials = {t: {} for t in CollectibleType}
+        levels = Config.item_levels
+        for lvl in levels:
+            ts, rnd = 8, lvl
+            for t, rgb_a, rgb_b in [(CollectibleType.Apple, "0 1 0", "1 0 0"),
+                                    (CollectibleType.Pepper, "1 0 0", "0 1 0")]:
+                xml.asset.add('texture', name=f"txt{t.name}-lvl{lvl}",
+                              type="cube", builtin="flat",
+                              rgb1=rgb_a, rgb2=rgb_a, width=ts, height=ts,
+                              mark="random", markrgb=rgb_b, random=rnd)
+                m = xml.asset.add('material', name=f"mat{t.name}-lvl{lvl}",
+                                  texture=f"txt{t.name}-lvl{lvl}",
+                                  texrepeat="1 1", texuniform="true", reflectance="0")
+                materials[t][lvl] = m
+
+        # Toy textures for the robots (not working)
+        # xml.compiler.texturedir = "/home/kgd/work/code/vu/revolve_vision/"
+        # xml.asset.add('texture', name="creeper", type="cube",
+        #               file="creeper_texture.png", width=64, height=64)
+        # creeper_material = \
+        #     xml.asset.add('material', name="creeper", texture="creeper")
 
         gh_width = .025
         for i, x, y in [(0, 0, 1), (1, 1, 0), (2, 0, -1), (3, -1, 0)]:
@@ -309,10 +422,11 @@ class Scenario:
                               euler=[0, 0, i * math.pi / 2],
                               type="box", size=[gh_size, gh_width, b_height])
 
-        if Scenario._items is not None:
-            for i, item in enumerate(Scenario._items):
-                name = f"{item.type}#{i}"
-                # radii = [i_radius * 1 for r in item.type.radius(item_distinction)]
+        items = Scenario._generate_items()
+        if items is not None:
+            for i, item in enumerate(items):
+                s = item.lvl
+                name = f"{item.type}#{i}#{s}"
 
                 body = xml.worldbody.add('body', name=name,
                                          pos=[item.x, item.y, 0],
@@ -320,15 +434,7 @@ class Scenario:
                 body.add('geom', name=name,
                          # rgba=item.type.color(item_distinction),
                          type="sphere", size=f"{i_radius} 0 0",
-                         material=f"mat{item.type.name}")
-
-                # body = xml.worldbody.add('body', name=name,
-                #                          pos=[item.x, item.y, radii[-1]],
-                #                          mocap=True)
-                # body.add('geom', name=name,
-                #          rgba=item.type.color(item_distinction),
-                #          type="ellipsoid", size=radii)
-                #          # material="object")
+                         material=materials[item.type][s].name)
 
         if options is not None and options.view is not None and options.view.mark_start:
             for robot in robots:
@@ -336,6 +442,14 @@ class Scenario:
                                   name=robot.full_identifier[:-1] + "_start",
                                   pos=robot.pos * [1, 1, 0], rgba=[0, 0, 1, 1],
                                   type="ellipsoid", size=[0.05, 0.05, 0.0001])
+
+        for r in robots:
+            for g in r.find_all('geom'):
+                if math.isclose(g.size[0], g.size[1]):
+                    g.rgba = ".3 0 .3 1"
+                else:
+                    g.rgba = "0 .3 0 1"
+                    # g.material = creeper_material
 
         for hinge in filter(lambda j: j.tag == 'joint', xml.find_all('joint')):
             xml.sensor.add('jointpos', name=f"{hinge.full_identifier}_sensor".replace('/', '_'),

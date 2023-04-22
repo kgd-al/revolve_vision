@@ -14,25 +14,21 @@ class Config:
     simulation_time: Annotated[float, "Duration of the simulation"] = 10
     control_frequency: Annotated[float, "How frequently to call the controller"] = 10
 
-    ground_size: Annotated[float, "Total size of the arena"] = 5
+    ground_size: Annotated[float, "Total size of the arena"] = 10
     item_size: Annotated[float, "Size of an object"] = .1
+    item_levels: Annotated[list[float], "Difficulty levels"] = [.0, .1, .2, .3]
+    item_count: Annotated[int, "Number of items"] = 3*2*len(item_levels)
 
-    brain_types = [abrain.ANN.__name__, "CPG"]
-    brain_type: Annotated[str, f"The type of brain to use {brain_types}"] = abrain.ANN.__name__
-    # brain_type = abrain.ANN.__name__
     abrain = abrain.Config
 
-    # vision: Annotated[bool, "Whether to use visual input"] = True
-    # vision_size: Annotated[Tuple[int, int], "Visual retina size (DEBUG)"] = 3, 2
-
-    class OpenGLLib(Enum):
+    class OpenGLLib(str, Enum):
         EGL = auto()
         OSMESA = auto()
         GLFW = auto()
 
-    opengl_lib: Annotated[str, "OpenGL back-end for vision"] = OpenGLLib.OSMESA.name
+    opengl_lib: Annotated[str, "OpenGL back-end for vision"] = OpenGLLib.EGL.name
 
-    class RetinaConfiguration(Enum):
+    class RetinaConfiguration(str, Enum):
         # Mangled
         X = auto()      # side-by-side
         Y = auto()      # different depths
@@ -45,6 +41,17 @@ class Config:
     retina_configuration: Annotated[RetinaConfiguration,
                                     "Mapping of the 3D camera to the 3D substrate"] = \
         RetinaConfiguration.Y
+
+    with_vision: Annotated[bool, "Activate/deactivate visual inputs"] = True
+    vision_mutation_rate: Annotated[float, "Mutation rate for the retina"] = .1
+    vision_mutation_range = ((3, 10), (2, 10))
+
+    class BodyType(str, Enum):
+        GECKO = auto()
+        SNAKE = auto()
+        SPIDER = auto()
+        TORSO = auto()
+    body_type: Annotated[BodyType, "Morphological specification"] = BodyType.GECKO
 
     @classmethod
     def write_json(cls, file: Path):
@@ -71,6 +78,8 @@ class Config:
                 k_type = hint.__args__[0]
                 if k_type == bool:
                     k_type = ast.literal_eval
+                elif isinstance(v, Enum):
+                    k_type = lambda s, k_t=k_type: k_t[s]
                 group.add_argument('--config-' + k, dest="config_" + k, metavar='V',
                                    type=k_type,
                                    help=f"{'.'.join(hint.__metadata__)}"

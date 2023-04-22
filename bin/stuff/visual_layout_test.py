@@ -38,3 +38,5 @@ for rgb in range(3):
 brain = abrain.ANN.build(inputs, outputs, genome)
 
 abrain.plotly_render(brain, labels).write_html("ann_layout_test.html")
+
+genome.to_dot("foo", "png")
