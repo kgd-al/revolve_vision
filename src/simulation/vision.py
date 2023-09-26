@@ -49,7 +49,7 @@ class OpenGLVision:
         self.cam.fixedcamid = 1
 
         self.vopt = mujoco.MjvOption()
-        self.scene = mujoco.MjvScene(model, maxgeom=model.ngeom+1)
+        self.scene = mujoco.MjvScene(model, maxgeom=model.ngeom+2)
         self.pert = mujoco.MjvPerturb()
 
         self.img = np.zeros((self.height, self.width, 3), dtype=np.uint8)

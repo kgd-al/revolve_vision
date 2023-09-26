@@ -29,6 +29,7 @@ class Config:
     opengl_lib: Annotated[str, "OpenGL back-end for vision"] = OpenGLLib.EGL.name
 
     class RetinaConfiguration(str, Enum):
+        R = auto()   # Chaotic, single-layer
         # Mangled
         X = auto()      # side-by-side
         Y = auto()      # different depths
@@ -75,7 +76,8 @@ class Config:
         for k, v in cls._get_items(cls).items():
             hint = hints.get(k)
             if hint is not None:
-                k_type = hint.__args__[0]
+                real_type = hint.__args__[0]
+                k_type = real_type
                 if k_type == bool:
                     k_type = ast.literal_eval
                 elif isinstance(v, Enum):
@@ -83,7 +85,7 @@ class Config:
                 group.add_argument('--config-' + k, dest="config_" + k, metavar='V',
                                    type=k_type,
                                    help=f"{'.'.join(hint.__metadata__)}"
-                                        f" (default: {v}, type: %(type)s)")
+                                        f" (default: {v}, type: {real_type})")
 
     @classmethod
     def argparse_process(cls, args):

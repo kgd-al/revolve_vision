@@ -1,4 +1,5 @@
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -75,15 +76,36 @@ class Evaluator:
                 OpenGLVision(runner.model, genome.vision, runner.headless)
 
         if (p := options.ann_save_path) is not None:
-            p = options.runner.save_folder.joinpath(p)
-            plotly_render(brain, runner.controller.actor_controller.labels).write_html(p)
+            p: Path = options.runner.save_folder.joinpath(p)
+            pr = plotly_render(brain, runner.controller.actor_controller.labels)
+            pr.write_html(p)
             logging.info(f"Generated {p}")
+
+            if False:
+                p_ = p.with_suffix(".mp4")
+                frames = 100
+
+                xd = dict(title=None, visible=False, showticklabels=False)
+                pr.update_layout(title=dict(automargin=False),
+                                 scene=dict(xaxis=xd, yaxis=xd, zaxis=xd),
+                                 margin=dict(autoexpand=False, b=0, l=0, r=0, t=0),
+                                 width=500, height=500)
+                for i in range(frames):
+                    cr = 2
+                    ct = 2 * math.pi * i / frames
+                    eye = dict(x=cr * math.cos(ct), y=cr * math.sin(ct), z=0)
+                    print(f"{100*i/frames:03.2f}% {eye}")
+                    pr.update_layout(scene_camera=dict(eye=eye))
+                    pr.write_image(f"test_image_{i:03d}.png")
+                logging.info(f"Generated images")
 
         if rerun:
             viewer = runner.viewer
 
         if not r.reject:
             runner.run()
+
+        scenario.finalize()
 
         r.fitnesses = cls._clip(scenario.fitness(), scenario.fitness_bounds(),
                                 "fitness")

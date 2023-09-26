@@ -1,6 +1,7 @@
 import logging
 import pprint
 from pathlib import Path
+from random import Random
 from typing import List, Tuple, Optional
 
 import numpy as np
@@ -33,13 +34,17 @@ class SensorControlData(DefaultActorControl):
 # ANN (abrain) controller (also handles the camera)
 # ==============================================================================
 
-def retina_mapper():
+def retina_mapper(rng):
     rc = Config.RetinaConfiguration
     def debug_point(i, j, k, x, y, z):
         p = Point(x, y, z)
         print(f"[kgd-debug] {i=} {j=} {k=}, {x=:+5.3f} {y=:+5.3f} {z=:+5.3f}")
         return p
     lut = {
+        rc.R: lambda *_:
+            Point(rng.uniform(-1, 1),
+                  -1 + .1,
+                  rng.uniform(-1, 1)),
         rc.X: lambda i, j, k, w, h:
             Point(2 * (w * k + i) / (3 * w - 1) - 1,
                   -1 + .1,
@@ -171,7 +176,7 @@ class ANNControl:
                     labels[op] = f"M{i}"
 
             if self.brain_dna.with_vision():
-                mapper = retina_mapper()
+                mapper = retina_mapper(Random(0))
                 w, h = self.brain_dna.vision
                 for j in reversed(range(h)):
                     for i in range(w):

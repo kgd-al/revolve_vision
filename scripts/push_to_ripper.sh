@@ -26,7 +26,7 @@ update(){
   rsync -avzhP --prune-empty-dirs $@ $base/$dir
 }
 
-update revolve_vision bin src scripts frozen.pip
+update revolve_vision bin src scripts
 update abrain src commands.sh CMakeLists.txt setup.py
 update revolve ./{core,runners}
 

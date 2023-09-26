@@ -8,23 +8,27 @@ import math
 import numbers
 import os
 import pprint
-import random
 import time
 from datetime import timedelta
 from pathlib import Path
 from random import Random
 from typing import Dict, Optional
 
+import cv2
 import humanize
+import numpy as np
+import pandas as pd
+from PIL.Image import Image
+from abrain import CPPN, Point
 from colorama import Fore, Style
+from matplotlib import pyplot as plt
 
 from abrain.core.genome import GIDManager
-from src.evolution.common import Individual
 from src.default_experiment.evaluator import Evaluator, EvalOptions
-from src.default_experiment.scenario import Scenario
+from src.evolution.common import Individual
 from src.misc.config import Config
-from src.simulation.runner import RunnerOptions, ANNDataLogging
 from src.misc.genome import RVGenome
+from src.simulation.runner import RunnerOptions, ANNDataLogging
 
 
 class Options:
@@ -37,7 +41,12 @@ class Options:
         self.perf_check: bool = True
 
         self.save_ann: bool = False
-        self.save_neurons: ANNDataLogging = ANNDataLogging.NONE
+        self.save_cppn: bool = False
+        self.draw_cppn: bool = False
+        self.save_neurons: str = str(ANNDataLogging.NONE)
+        self.save_path: bool = False
+
+        self.flip_items: bool = False
 
         self.view: bool = False
         self.speed: float = 1.0
@@ -70,11 +79,20 @@ class Options:
         group.add_argument('--no-performance-check', dest="perf_check",
                            action='store_false',
                            help="Do not check for identical behavior")
+        group.add_argument('--write-cppn', dest="save_cppn", action='store_true',
+                           help="Requests that the CPPN be written to file")
+        group.add_argument('--draw-cppn', dest="draw_cppn", action='store_true',
+                           help="Requests that the CPPN be used to draw some"
+                                " of its patterns")
         group.add_argument('--write-ann', dest="save_ann", action='store_true',
                            help="Requests that the ANN be written to file")
-        group.add_argument('--write-neurons', dest="save_neurons",
+        group.add_argument('--log-neurons', dest="save_neurons",
                            help=f"Requests that neuron states be written to file. "
                                 f"Valid values are {[v.name for v in ANNDataLogging]}")
+        group.add_argument('--log-trajectory', dest="save_path", action='store_true',
+                           help=f"Log robot path (and instant fitness)")
+        group.add_argument('--flip-items', dest="flip_items", action='store_true',
+                           help=f"Flip items in the environment to test for robust strategy")
 
         group = parser.add_argument_group("Rendering",
                                           "Additional rendering flags")
@@ -165,12 +183,12 @@ def main() -> int:
         print("Command line-arguments:")
         pprint.PrettyPrinter(indent=2, width=1).pprint(args.__dict__)
 
-    defaults = (args.robot.name == 'None')
+    defaults = (args.robot.name.upper() == 'NONE')
     if defaults:
         generate_defaults(args)
 
     if args.config is None:
-        args.config = try_locate(args.robot, "config.json", 1)
+        args.config = try_locate(args.robot, "config.json", 2)
     Config.read_json(args.config)
     Config.argparse_process(args)
 
@@ -180,7 +198,7 @@ def main() -> int:
     if args.record:
         save_folder = True
         options.runner.record = RunnerOptions.Record(
-            video_file_path=args.robot.stem + ".movie.mp4",
+            video_file_path=Path(args.robot.stem + ".movie.mp4"),
             width=args.width, height=args.height)
 
     elif args.view:
@@ -197,10 +215,16 @@ def main() -> int:
         save_folder = True
         options.ann_save_path = args.robot.stem + ".ann.html"
 
-    if args.save_neurons != ANNDataLogging.NONE:
+    if args.save_neurons != str(ANNDataLogging.NONE):
         save_folder = True
         options.runner.ann_data_logging = ANNDataLogging[args.save_neurons]
         options.runner.ann_data_file = args.robot.stem + ".neurons.dat"
+
+    if args.save_path:
+        save_folder = True
+        options.runner.log_path = args.robot.stem + ".trajectory.dat"
+
+    options.runner.flipped_items = args.flip_items
 
     if save_folder:
         options.runner.save_folder = args.robot.parent
@@ -217,6 +241,52 @@ def main() -> int:
 
     ind = Individual.from_file(args.robot)
     genome = ind.genome
+
+    if args.save_cppn:
+        path = str(args.robot.parent.joinpath(args.robot.stem + ".cppn"))
+        genome.brain.to_dot(path + ".png")
+        genome.brain.to_dot(path + ".pdf")
+        genome.brain.to_dot(path + ".dot")
+        return 0
+
+    if args.draw_cppn:
+        cppn = CPPN(genome.brain)
+        s = 100
+        # dp = Point(0, 0, 0)
+        o_types = {CPPN.Output.Weight, CPPN.Output.LEO}
+        outputs = cppn.outputs()
+        wl_data = np.zeros((2, 2*s+1, 2*s+1, 3), dtype=np.uint8)
+        b_data = np.zeros((s, s, 3), dtype=np.uint8)
+
+        def to_uint(v):
+            if v > 0:
+                return np.full(3, np.uint8(v*255))
+            else:
+                return np.array([0, 0, np.uint8(-v*255)])
+
+        for di, dj in [(0, 0), (0, 1), (1, 0), (1, 1)]:
+            dp = Point(-.5 + di, 1, -.5 + dj)
+            i_, j_ = (s+1)*di, (s+1)*dj
+            for i, x in enumerate(np.linspace(-1, 1, s)):
+                for j, z in enumerate(np.linspace(-1, 1, s)):
+                    cppn(Point(x, -.9, z), dp, outputs, o_types)
+                    wl_data[0, i_+i, j_+j, :] = to_uint(outputs[0])
+                    wl_data[1, i_+i, j_+j, :] = to_uint(outputs[1])
+        dp = Point(0, 0, 0)
+        for i, x in enumerate(np.linspace(-1, 1, s)):
+            for j, z in enumerate(np.linspace(-1, 1, s)):
+                b_data[i, j, :] = \
+                    to_uint(cppn(Point(x, 1, z), dp, CPPN.Output.Bias))
+        for name, a in [("weight", wl_data[0]),
+                        ("leo", wl_data[1]),
+                        ("bias", b_data)]:
+            path = str(args.robot.parent.joinpath(
+                f"{args.robot.stem}.cppn.{name}.png"))
+            if cv2.imwrite(path, a):
+                print("Generated", path)
+            else:
+                print("Error generating", path)
+        return 0
 
     result, viewer = Evaluator.evaluate_rerun(genome, options)
 
@@ -277,8 +347,10 @@ def performance_compare(lhs: Evaluator.Result, rhs: Evaluator.Result, verbosity)
                 if lhs_v != rhs_v:
                     lhs_str, rhs_str = f_format(lhs_v), f_format(rhs_v)
                     if isinstance(lhs_v, numbers.Number):
+                        diff = rhs_v - lhs_v
+                        ratio = math.inf if lhs_v == 0 else diff/math.fabs(lhs_v)
                         output += f"{Fore.RED}{lhs_str} | {rhs_str}" \
-                                  f"\t({rhs_v-lhs_v}, {100*(math.inf if lhs_v == 0 else rhs_v/lhs_v):.2f}%)"
+                                  f"\t({diff}, {100*ratio:.2f}%)"
                     else:
                         output += "\n"
                         for lhs_item, rhs_item in zip(lhs_str.split('\n'), rhs_str.split('\n')):

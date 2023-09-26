@@ -1,23 +1,27 @@
-import json
+import logging
 import logging
 import math
 import pprint
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
-from pathlib import Path
 from random import Random
 from typing import Optional, List, Dict
 
 import cv2
 import numpy as np
+import pandas as pd
+from matplotlib import pyplot as plt
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 from mujoco import MjData, MjModel
 from pyrr import Vector3
-
 from revolve2.core.modular_robot import Body, Brick, ActiveHinge, ModularRobot, Module
+
 from ..misc.config import Config
 from ..simulation.control import ANNControl, SensorControlData
 from ..simulation.runner import Runner, RunnerOptions
+
 
 # ==============================================================================
 # Robots
@@ -137,6 +141,70 @@ class Scenario:
         self._steps = 0
         self._speed = 0
 
+        if runner.options.log_path:
+            self.path_log_path = runner.options.save_folder.joinpath(runner.options.log_path)
+            logging.info(f"Logging path to {self.path_log_path}")
+            self.path_logger = open(self.path_log_path, 'w')
+            self.path_logger.write(f"X Y F\n")
+
+    def finalize(self):
+        if self.runner.options.log_path:
+            self.path_logger.close()
+            logging.info(f"Generated {self.path_log_path}")
+
+            df = pd.read_csv(self.path_log_path, sep=' ')
+
+            fig, ax = plt.subplots()
+            ax: Axes = ax
+            ax.plot(df.X, df.Y, zorder=-1)
+
+            i_alpha = .25
+            idf = pd.DataFrame(columns=list("XYCL"))
+            model = self.runner.model
+            srm_names: bytes = model.names
+            for i in range(model.nbody):
+                addr = model.name_bodyadr[i]
+                ln = srm_names.find(b'\0', addr)
+                name = srm_names[addr:ln].decode('ascii')
+                tokens = name.split("#")
+                if not tokens[0].startswith(CollectibleType.__name__):
+                    continue
+                i_type = tokens[0].split('.')[1]
+                level = int(10*float(tokens[2]))
+                b_pos = Vector3(self.runner.data.mocap_pos[int(tokens[1])])
+                idf.loc[len(idf)] = [
+                    b_pos.x, b_pos.y,
+                    (float(i_type == CollectibleType.Pepper.name),
+                     float(i_type == CollectibleType.Apple.name),
+                     0,
+                     float(b_pos.z < 0)*(1-i_alpha)+i_alpha),
+                    level]
+
+            idf_gbl = idf.groupby("L")
+            for gk in idf_gbl.groups:
+                gg = idf_gbl.get_group(gk)
+                ax.scatter(x=gg.X, y=gg.Y, c=gg.C, marker=(3+gk, 0, 0),
+                           zorder=1)
+            # print(i_l)
+
+            margin = .1
+            lim = max(*np.abs(np.quantile(idf.X, [0, 1])),
+                      *np.abs(np.quantile(idf.Y, [0, 1])))
+            lim = math.ceil((1 + margin) * lim)
+            ax.set_xlim(-lim, lim)
+            ax.set_ylim(-lim, lim)
+
+            fig: Figure = fig
+            fig.suptitle(",".join(f"{k}: {v}"
+                                  for k, v in self.fitness().items()))
+
+            img_file = self.path_log_path.with_suffix('.png')
+            ax.set_xlabel("X")
+            ax.set_ylabel("Y")
+            fig.tight_layout()
+            fig.savefig(img_file)
+            logging.info(f"Generated {img_file}")
+
     def subject_position(self):
         return self.runner.get_actor_state(0).position
 
@@ -164,6 +232,9 @@ class Scenario:
         p1 = self.subject_position()
         self._speed += dt * math.sqrt((p0[0] - p1[0]) ** 2 + ((p0[1] - p1[1]) ** 2))
         self._prev_position = p1
+
+        if self.runner.options.log_path:
+            self.path_logger.write(f"{p1.x} {p1.y} {list(self.fitness(instantaneous=True).values())[0]}\n")
 
         self._steps += 1
 
@@ -198,26 +269,27 @@ class Scenario:
     def _fitness(cls, c_type: str, c_level: float):
         return cls._rewards[c_type] * (1 + c_level)
 
-    def fitness(self) -> Dict[str, float]:
+    def fitness(self, instantaneous: bool = False) -> Dict[str, float]:
         score = sum(self.collected)
 
-        s_pos: Vector3 = self.subject_position()
-        dists = []
-        model = self.runner.model
-        srm_names: bytes = model.names
-        for i in range(model.nbody):
-            addr = model.name_bodyadr[i]
-            ln = srm_names.find(b'\0', addr)
-            name = srm_names[addr:ln].decode('ascii')
-            if CollectibleType.Apple.name not in name:
-                continue
-            b_pos = Vector3(model.body(name).pos)
-            if b_pos.z < 0:  # Already collected
-                continue
-            dists.append((s_pos - b_pos).length)
+        if not instantaneous:  # Look for closest favorable target
+            s_pos: Vector3 = self.subject_position()
+            dists = []
+            model = self.runner.model
+            srm_names: bytes = model.names
+            for i in range(model.nbody):
+                addr = model.name_bodyadr[i]
+                ln = srm_names.find(b'\0', addr)
+                name = srm_names[addr:ln].decode('ascii')
+                if CollectibleType.Apple.name not in name:
+                    continue
+                b_pos = Vector3(model.body(name).pos)
+                if b_pos.z < 0:  # Already collected
+                    continue
+                dists.append((s_pos - b_pos).length)
 
-        if len(dists) > 0:  # Still more to collect
-            score += .1 * (1-min(dists) / math.sqrt(2*Config.ground_size))
+            if len(dists) > 0:  # Still more to collect
+                score += .1 * (1-min(dists) / math.sqrt(2*Config.ground_size))
 
         return {self.fitness_name(): score}
 
@@ -267,11 +339,14 @@ class Scenario:
     @lru_cache(maxsize=1)
     def descriptor_bounds(cls):
         ys = [item.y for item in cls._generate_items()]
-        min_max = (min(ys), max(ys))
+        min_max = [min(ys), max(ys)]
         logging.debug(f"Computed y range as {min_max}")
         assert min_max[0] < min_max[1]
+        ubound = max([math.ceil(math.fabs(x)) for x in ys])
+        bounds = (-ubound, ubound)
+        logging.debug(f"Using y range: {bounds}")
 
-        return [min_max, (2, 10)]
+        return [bounds, (2, 10)]
 
     # ==========================================================================
     #
@@ -422,6 +497,7 @@ class Scenario:
                               euler=[0, 0, i * math.pi / 2],
                               type="box", size=[gh_size, gh_width, b_height])
 
+        flip = -1 if options.flipped_items else 1
         items = Scenario._generate_items()
         if items is not None:
             for i, item in enumerate(items):
@@ -429,7 +505,7 @@ class Scenario:
                 name = f"{item.type}#{i}#{s}"
 
                 body = xml.worldbody.add('body', name=name,
-                                         pos=[item.x, item.y, 0],
+                                         pos=[item.x, flip * item.y, 0],
                                          mocap=True)
                 body.add('geom', name=name,
                          # rgba=item.type.color(item_distinction),

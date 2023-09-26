@@ -71,8 +71,12 @@ class RunnerOptions:
         fps: int = 24
     record: Optional[Record] = None
 
+    flipped_items: bool = False
+
     save_folder: Optional[Path] = None
     ann_data_logging: ANNDataLogging = ANNDataLogging.NONE
+
+    log_path: Optional[str] = None
 
 
 class DefaultActorControl(ActorControl):

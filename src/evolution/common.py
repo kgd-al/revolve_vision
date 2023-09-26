@@ -64,7 +64,7 @@ class Tee:
 
     def set_log_path(self, path: Path):
         self.register()
-        self.log = open(path, 'w')
+        self.log = open(path, 'wt', buffering=1)
         for msg in self.msg_queue:
             self._write(msg)
 
