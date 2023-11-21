@@ -162,13 +162,7 @@ def main():
 
     if best is not None:
         with open(run_folder.joinpath("best.json"), 'w') as f:
-            data = {
-                "id": best.id(), "parents": best.genome.parents(),
-                "fitnesses": best.fitnesses,
-                "descriptors": best.descriptors,
-                "stats": best.stats,
-                "genome": best.genome.to_json()
-            }
+            data = Algorithm.to_json(best)
             logging.info(f"best:\n{pprint.pformat(data)}")
             json.dump(data, f)
     else:

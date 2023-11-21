@@ -34,17 +34,22 @@ class SensorControlData(DefaultActorControl):
 # ANN (abrain) controller (also handles the camera)
 # ==============================================================================
 
-def retina_mapper(rng):
+def retina_mapper():
     rc = Config.RetinaConfiguration
     def debug_point(i, j, k, x, y, z):
         p = Point(x, y, z)
         print(f"[kgd-debug] {i=} {j=} {k=}, {x=:+5.3f} {y=:+5.3f} {z=:+5.3f}")
         return p
-    lut = {
-        rc.R: lambda *_:
+
+    def random_point(seed):
+        return lambda *_, rng=Random(seed): (
             Point(rng.uniform(-1, 1),
                   -1 + .1,
-                  rng.uniform(-1, 1)),
+                  rng.uniform(-1, 1)))
+    lut = {
+        rc.R0: random_point(0),
+        rc.R1: random_point(1),
+        rc.R2: random_point(2),
         rc.X: lambda i, j, k, w, h:
             Point(2 * (w * k + i) / (3 * w - 1) - 1,
                   -1 + .1,
@@ -138,7 +143,7 @@ class ANNControl:
     class Brain(Brain):
         def __init__(self, brain_dna: RVGenome, with_labels=False):
             self.brain_dna = brain_dna
-            self.with_labels = with_labels
+            self.with_labels = with_labels or Config.debug_retina_brain
 
         def make_controller(self, body: Body, dof_ids: List[int]) -> ActorController:
             parsed_coords = body.to_tree_coordinates()
@@ -176,7 +181,7 @@ class ANNControl:
                     labels[op] = f"M{i}"
 
             if self.brain_dna.with_vision():
-                mapper = retina_mapper(Random(0))
+                mapper = retina_mapper()
                 w, h = self.brain_dna.vision
                 for j in reversed(range(h)):
                     for i in range(w):

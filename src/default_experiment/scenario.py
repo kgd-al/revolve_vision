@@ -1,23 +1,26 @@
 import logging
 import logging
 import math
+import os
 import pprint
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
 from random import Random
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 
+import abrain
 import cv2
 import numpy as np
 import pandas as pd
-from matplotlib import pyplot as plt
+from matplotlib import pyplot as plt, collections
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from mujoco import MjData, MjModel
 from pyrr import Vector3
 from revolve2.core.modular_robot import Body, Brick, ActiveHinge, ModularRobot, Module
 
+from ..misc.genome import RVGenome
 from ..misc.config import Config
 from ..simulation.control import ANNControl, SensorControlData
 from ..simulation.runner import Runner, RunnerOptions
@@ -81,43 +84,10 @@ Runner.actorController_t = SensorControlData
 # Runner.environmentActorController_t = ActorControl
 
 
-def build_robot(brain_dna, with_labels):
-    return ModularRobot(default_body(), ANNControl.Brain(brain_dna, with_labels))
-
-
-# ==============================================================================
-# Items
-# ==============================================================================
-
-
-class CollectibleType(Enum):
-    Apple = 0
-    Pepper = 1
-
-    @staticmethod
-    def random(rng: Random):
-        return rng.choice([t for t in CollectibleType])
-
-    def _v(self, separation):
-        return .5 * (1 + (2 * self.value - 1) * separation)
-
-    def radius(self, separation: float):
-        v = 1-.5*self._v(separation)
-        return [1, v, v]
-
-    def color(self, separation: float):
-        v = self._v(separation)
-        return [v, 1-v, 0, 1]
-
-
-@dataclass
-class CollectibleObject:
-    x: float = 0
-    y: float = 0
-    type: CollectibleType = CollectibleType.Apple
-    lvl: float = 0
-
-    def __repr__(self): return f"{self.type.name:6s} {self.x:+.2f} {self.y:+.2f} {self.lvl}"
+def build_robot(brain_dna: RVGenome, with_labels: bool):
+    return (ModularRobot(default_body(),
+                        ANNControl.Brain(brain_dna, with_labels))
+            .make_actor_and_controller())
 
 
 # ==============================================================================
@@ -125,85 +95,87 @@ class CollectibleObject:
 # ==============================================================================
 
 class Scenario:
-    _rewards = {
-        str(CollectibleType.Apple): 1,
-        str(CollectibleType.Pepper): -1,
+    _rewards = [     -1,     1,     0]
+    #               R      G      B
+    Color = Tuple[float, float, float]
+    _colors: dict[str, Color] = {
+        'R': [1, 0, 0],
+        'G': [0, 1, 0],
+        'B': [0, 0, 1],
+        'Y': [1, 1, 0],
+        'M': [1, 0, 1],
+        'C': [0, 1, 1],
     }
-
-    _items: Optional[List[CollectibleObject]] = None
+    _items: Tuple[Color, Color]
+    _items_pos = [.5, .5]
 
     def __init__(self, runner: Runner, run_id: Optional[int] = None):
         self.runner = runner
         self.id = run_id
-        self.collected = []
+        self.collected = None
         self._initial_position = self.subject_position()
         self._prev_position = self._initial_position
         self._steps = 0
         self._speed = 0
 
         if runner.options.log_path:
-            self.path_log_path = runner.options.save_folder.joinpath(runner.options.log_path)
+            self.path_log_path = (
+                runner.options.save_folder.joinpath(runner.options.log_path))
             logging.info(f"Logging path to {self.path_log_path}")
             self.path_logger = open(self.path_log_path, 'w')
-            self.path_logger.write(f"X Y F\n")
+            self.path_logger.write(f"X Y\n")
 
     def finalize(self):
         if self.runner.options.log_path:
+            # self.path_logger.write(f"{self.collected is not None}"
+            #                        f" {self.local_fitness()[1]}")
             self.path_logger.close()
             logging.info(f"Generated {self.path_log_path}")
 
-            df = pd.read_csv(self.path_log_path, sep=' ')
+    @classmethod
+    def aggregate(cls, folders, fitnesses, options):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-            fig, ax = plt.subplots()
-            ax: Axes = ax
-            ax.plot(df.X, df.Y, zorder=-1)
+        n = len(folders)
+        n_rows = math.floor(math.sqrt(n))
+        n_cols = n // n_rows
+        fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols,
+                                 sharex="all", sharey="all",
+                                 subplot_kw=dict(box_aspect=1))
+        for ax, f in zip(axes.flatten(), folders):
+            spec = f.stem
+            df = pd.read_csv(f.joinpath(options.log_path), sep=' ')
+            contact, success = fitnesses[spec]
+            # df = df.iloc[:-1].astype(float)
+            ax.add_collection(collections.EllipseCollection(
+                widths=2*Config.item_size, heights=2*Config.item_size,
+                angles=0, units='xy', facecolors=list(f.stem.lower()),
+                offsets=[(cls._items_pos[0], i*cls._items_pos[1])
+                         for i in [1, -1]],
+                offset_transform=ax.transData
+            ))
 
-            i_alpha = .25
-            idf = pd.DataFrame(columns=list("XYCL"))
-            model = self.runner.model
-            srm_names: bytes = model.names
-            for i in range(model.nbody):
-                addr = model.name_bodyadr[i]
-                ln = srm_names.find(b'\0', addr)
-                name = srm_names[addr:ln].decode('ascii')
-                tokens = name.split("#")
-                if not tokens[0].startswith(CollectibleType.__name__):
-                    continue
-                i_type = tokens[0].split('.')[1]
-                level = int(10*float(tokens[2]))
-                b_pos = Vector3(self.runner.data.mocap_pos[int(tokens[1])])
-                idf.loc[len(idf)] = [
-                    b_pos.x, b_pos.y,
-                    (float(i_type == CollectibleType.Pepper.name),
-                     float(i_type == CollectibleType.Apple.name),
-                     0,
-                     float(b_pos.z < 0)*(1-i_alpha)+i_alpha),
-                    level]
+            color = "k"
+            if contact:
+                color = {-1: 'r', 1: 'g'}.get(success, 'b')
 
-            idf_gbl = idf.groupby("L")
-            for gk in idf_gbl.groups:
-                gg = idf_gbl.get_group(gk)
-                ax.scatter(x=gg.X, y=gg.Y, c=gg.C, marker=(3+gk, 0, 0),
-                           zorder=1)
-            # print(i_l)
+            ax.plot(df.X, df.Y, color=color)
 
-            margin = .1
-            lim = max(*np.abs(np.quantile(idf.X, [0, 1])),
-                      *np.abs(np.quantile(idf.Y, [0, 1])))
-            lim = math.ceil((1 + margin) * lim)
-            ax.set_xlim(-lim, lim)
-            ax.set_ylim(-lim, lim)
+            hgs = .5 * Config.ground_size
+            ax.set_xlim(-hgs, hgs)
+            # ax.set_xlabel("X")
+            ax.set_ylim(-hgs, hgs)
+            # ax.set_ylabel("Y")
+            ax.set_title(f"{spec}: {success:g}")
+            # ax.set_box_aspect(1)
 
-            fig: Figure = fig
-            fig.suptitle(",".join(f"{k}: {v}"
-                                  for k, v in self.fitness().items()))
+        fitness = cls.fitness(fitnesses, Config.env_specifications)
 
-            img_file = self.path_log_path.with_suffix('.png')
-            ax.set_xlabel("X")
-            ax.set_ylabel("Y")
-            fig.tight_layout()
-            fig.savefig(img_file)
-            logging.info(f"Generated {img_file}")
+        path = options.save_folder.joinpath(options.log_path).with_suffix('.png')
+        fig.suptitle(f"Fitness: {fitness:g}")
+        fig.tight_layout()
+        fig.savefig(path, bbox_inches='tight')
+        print("Generated", path)
 
     def subject_position(self):
         return self.runner.get_actor_state(0).position
@@ -215,26 +187,25 @@ class Scenario:
         collected = set()
         for a, b in {(mj_data.geom(i), mj_data.geom(j)) for i, j in
                      zip(mj_data.contact.geom1, mj_data.contact.geom2)}:
-            if "robot" in a.name and CollectibleType.__name__ in b.name:
+            if "robot" in a.name and "Item" in b.name:
                 collected.add(b)
-            if "robot" in b.name and CollectibleType.__name__ in a.name:
+            if "robot" in b.name and "Item" in a.name:
                 collected.add(a)
 
         if len(collected) > 0:
-            for geom in collected:
-                tokens = geom.name.split('#')
-                t_id = tokens[0]
-                b_id = int(tokens[1])
-                mj_data.mocap_pos[b_id][2] = -.25
-                self.collected.append(self._fitness(t_id, float(tokens[2])))
+            assert len(collected) == 1
+            color_name = next(iter(collected)).name.split('#')[1]
+            self.collected = (color_name, self._steps)
+            self.runner.running = False
 
         p0 = self._prev_position
         p1 = self.subject_position()
-        self._speed += dt * math.sqrt((p0[0] - p1[0]) ** 2 + ((p0[1] - p1[1]) ** 2))
+        self._speed += (
+                dt * math.sqrt((p0[0] - p1[0]) ** 2 + ((p0[1] - p1[1]) ** 2)))
         self._prev_position = p1
 
         if self.runner.options.log_path:
-            self.path_logger.write(f"{p1.x} {p1.y} {list(self.fitness(instantaneous=True).values())[0]}\n")
+            self.path_logger.write(f"{p1.x} {p1.y}\n")
 
         self._steps += 1
 
@@ -256,184 +227,108 @@ class Scenario:
 
     @staticmethod
     def initial_position():
-        # return [0, 0, 0]
-        return [-2, 0, 0]
+        return [0, 0, 0]
+        # return [-2, 0, 0]
 
     # ==========================================================================
 
     @staticmethod
     def fitness_name():
-        return "collect"
+        return "identify"
 
     @classmethod
-    def _fitness(cls, c_type: str, c_level: float):
-        return cls._rewards[c_type] * (1 + c_level)
-
-    def fitness(self, instantaneous: bool = False) -> Dict[str, float]:
-        score = sum(self.collected)
-
-        if not instantaneous:  # Look for closest favorable target
-            s_pos: Vector3 = self.subject_position()
-            dists = []
-            model = self.runner.model
-            srm_names: bytes = model.names
-            for i in range(model.nbody):
-                addr = model.name_bodyadr[i]
-                ln = srm_names.find(b'\0', addr)
-                name = srm_names[addr:ln].decode('ascii')
-                if CollectibleType.Apple.name not in name:
-                    continue
-                b_pos = Vector3(model.body(name).pos)
-                if b_pos.z < 0:  # Already collected
-                    continue
-                dists.append((s_pos - b_pos).length)
-
-            if len(dists) > 0:  # Still more to collect
-                score += .1 * (1-min(dists) / math.sqrt(2*Config.ground_size))
-
-        return {self.fitness_name(): score}
+    def _fitness(cls, color_name: str):
+        color = cls._colors[color_name]
+        value = sum(c * v for c, v in zip(color, cls._rewards))
+        # print(f"[kgd-debug] {color=} {value=}")
+        return value
 
     @classmethod
-    @lru_cache(maxsize=1)
+    def local_fitness_bounds(cls):
+        return [(-1, 1)]
+
+    def local_fitness(self) -> Tuple[bool, float]:
+        if self.collected:
+            return True, self._fitness(self.collected[0])
+        else:
+            x0, y0, _ = self.initial_position()
+            x1, y1, _ = self.subject_position()
+            x, y = self._items_pos
+            def d(i0, j0, i1, j1): return math.sqrt((i1-i0)**2 + (j1-j0)**2)
+
+            d_min = min([
+                d(x1, y1, x, i*y) / d(x0, y0, x, i*y) for i in [-1, 1]
+            ])
+            score = .1 * (1 - d_min)
+            return False, score
+
+    @classmethod
     def fitness_bounds(cls):
-        items = cls._generate_items()
-        min_max = [0, 0]
-        for item in items:
-            f = cls._fitness(str(item.type), item.lvl)
-            min_max[int(f > 0)] += f
-        logging.debug(f"Computed fitness range as {min_max}")
-        assert min_max[0] < min_max[1]
+        return [(-100, 100)]
 
-        return [tuple(min_max)]
+    @classmethod
+    @lru_cache(maxsize=1)
+    def _fitness_bounds(cls, specs):
+        values = [(cls._fitness(s[0]), cls._fitness(s[1])) for s in specs]
+        f_min = sum(min(v0, v1) for v0, v1 in values)
+        f_max = sum(max(v0, v1) for v0, v1 in values)
+        assert -f_min == f_max
+        return f_max
 
-    # ==========================================================================
-
-    # @staticmethod
-    # def fitness_name():
-    #     return "speed"
-    #
-    # def fitness(self) -> Dict[str, float]:
-    #     score = 0
-    #     if self._steps > 0:
-    #         score += 100 * self._speed / self._steps
-    #     # score += sum([t for t in self.collected.values()])
-    #     return {self.fitness_name(): score}
-    #
-    # @classmethod
-    # def fitness_bounds(cls):
-    #     return [(0, 2)]
+    @classmethod
+    def fitness(cls, fitnesses, specs):
+        f_max = cls._fitness_bounds(specs)
+        score = 100 * np.sum([t[1] for t in fitnesses.values()]) / f_max
+        if not np.any([t[0] for t in fitnesses.values()]):
+            score -= 100
+        return max(-100, score)
 
     # ==========================================================================
 
     @staticmethod
+    @lru_cache(maxsize=1)
     def descriptor_names():
-        return ["depth", "vision"]
-
-    def descriptors(self) -> Dict[str, float]:
-        controller = self.runner.controller.actor_controller
-        v = math.sqrt(controller.vision.width * controller.vision.height)
-        y = np.clip(self.subject_position()[1], *self.descriptor_bounds()[0])
-        return {"y": y, "vision": v}
-
-    @classmethod
-    @lru_cache(maxsize=1)
-    def descriptor_bounds(cls):
-        ys = [item.y for item in cls._generate_items()]
-        min_max = [min(ys), max(ys)]
-        logging.debug(f"Computed y range as {min_max}")
-        assert min_max[0] < min_max[1]
-        ubound = max([math.ceil(math.fabs(x)) for x in ys])
-        bounds = (-ubound, ubound)
-        logging.debug(f"Using y range: {bounds}")
-
-        return [bounds, (2, 10)]
-
-    # ==========================================================================
-    #
-    # @staticmethod
-    # def descriptor_names():
-    #     return ["x", "y"]
-    #
-    # def descriptors(self) -> Dict[str, float]:
-    #     # random = Random()
-    #     # return [random.uniform(-2, 2) for _ in range(2)]
-    #     return {"x": self.subject_position()[0],
-    #             "y": self.subject_position()[1]}
-    #
-    # @staticmethod
-    # def descriptor_bounds():
-    #     w = Config.ground_size / 2
-    #     return [(-w, w), (-w, w)]
-
-    # ==========================================================================
-    #
-    # @staticmethod
-    # def descriptor_names(): return ["height", "angle"]
-    #
-    # def descriptors(self) -> List[float]:
-    #     return [v / self._steps if self._steps > 0 else 0
-    #             for v in [max(0, self._altitude), self._gait]]
-    #
-    # @staticmethod
-    # def descriptor_bounds(): return [(0.0, .5), (-90.0, 90.0)]
-    #
-    # ==========================================================================
+        return Scenario.descriptors(None, abrain.ANN())
 
     @staticmethod
-    def sunflower(n: int, r_range) -> np.ndarray:
-        phase = np.pi#np.pi/4
-        # Generate the angles. The factor k_theta corresponds to 2*pi/phi^2.
-        k_theta = np.pi * (3 - np.sqrt(5))
-        angles = phase + np.linspace(k_theta, k_theta * n, n)
+    def descriptors(genome, brain: abrain.ANN) -> Dict[str, float]:
+        stats = brain.stats()
+        dct = dict()
 
-        r_min, r_max = r_range
-        radii = np.sqrt(np.linspace(0, 1, n)) * (r_max - r_min) + r_min
+        # dct["neurons"] = math.log(stats.hidden)/math.log(8)\
+        #     if stats.hidden > 0 else 0
 
-        # Return Cartesian coordinates from polar ones.
-        return (radii * np.stack((np.cos(angles), np.sin(angles)))).T
+        def x(n: abrain.ANN.Neuron): return n.pos.tuple()[0]
 
-    @classmethod
+        sides = [
+            np.sign(x(n) * x(link.src()))
+            for n in brain.neurons() for link in n.links()
+        ]
+        dct["ipsilateral"] = np.average(sides) if sides else 0
+
+        inputs, outputs = len(brain.ibuffer()), len(brain.obuffer())
+        if stats.hidden == 0:
+            max_edges = inputs * outputs
+        else:
+            max_edges = (inputs * stats.hidden
+                         + stats.hidden * stats.hidden
+                         + stats.hidden * outputs)
+        dct["connectivity"] = stats.edges / max_edges if max_edges else 0
+
+        return dct
+
+    @staticmethod
     @lru_cache(maxsize=1)
-    def _generate_items(cls):
-        items = []
-        count = Config.item_count
-        r_range = (0, 2)
-        dx, dy = .5, 0
-
-        items_dict = {k: [] for k in CollectibleType}
-        if count > 0:
-            coordinates = Scenario.sunflower(count, r_range)
-            for i, (ix, iy) in enumerate(coordinates):
-                item = CollectibleObject(ix+dx, iy+dy, list(CollectibleType)[i % 2])
-                items.append(item)
-                items_dict[item.type].append(item)
-
-        checker = dict()
-        p0 = cls.initial_position()
-        levels = Config.item_levels
-        for ct in CollectibleType:
-            ct_items = sorted(items_dict[ct], key=lambda itm: math.sqrt((p0[0] - itm.x)**2 + (p0[1] - itm.y)**2))
-            for i, item in enumerate(ct_items):
-                item.lvl = levels[int(len(levels) * i / len(ct_items))]
-
-                key = (item.type, item.lvl)
-                checker[key] = checker.get(key, 0) + 1
-
-        balanced = (len(set(checker.values())) == 1)
-        if not balanced:
-            dct = {v: [] for v in checker.values()}
-            for k, v in checker.items():
-                dct[v].append(k)
-            assert balanced, f"Unbalanced items generation:\n{pprint.pformat(dct)}"
-
-        logging.debug(f"Generated items: {pprint.pformat(items)}")
-
-        return items
+    def descriptor_bounds():
+        dct = {"neurons": (0, Config.abrain.maxDepth),
+               "connectivity": (0, 1),
+               "ipsilateral": (-1, 1)}
+        return [dct[k] for k in Scenario.descriptor_names()]
 
     # ==========================================================================
 
-    @staticmethod
-    def amend(xml, options: RunnerOptions):
+    @classmethod
+    def amend(cls, xml, options: RunnerOptions):
         robots = [r for r in xml.worldbody.body]
 
         xml.visual.map.znear = ".001"
@@ -463,54 +358,28 @@ class Scenario:
                       rgb1="0 0 0", rgb2="0 0 0",
                       width=512, height=512,
                       mark="random", markrgb="1 1 1")
+        #
+        # gh_width = .025
+        # for i, x, y in [(0, 0, 1), (1, 1, 0), (2, 0, -1), (3, -1, 0)]:
+        #     b_height = g_size / 100
+        #     xml.worldbody.add('geom', name=f"border#{i}",
+        #                       pos=[x * (gh_size + gh_width),
+        #                            y * (gh_size + gh_width), b_height],
+        #                       rgba=[1, 1, 1, 1],
+        #                       euler=[0, 0, i * math.pi / 2],
+        #                       type="box", size=[gh_size, gh_width, b_height])
 
-        # different textures for the objects
-        materials = {t: {} for t in CollectibleType}
-        levels = Config.item_levels
-        for lvl in levels:
-            ts, rnd = 8, lvl
-            for t, rgb_a, rgb_b in [(CollectibleType.Apple, "0 1 0", "1 0 0"),
-                                    (CollectibleType.Pepper, "1 0 0", "0 1 0")]:
-                xml.asset.add('texture', name=f"txt{t.name}-lvl{lvl}",
-                              type="cube", builtin="flat",
-                              rgb1=rgb_a, rgb2=rgb_a, width=ts, height=ts,
-                              mark="random", markrgb=rgb_b, random=rnd)
-                m = xml.asset.add('material', name=f"mat{t.name}-lvl{lvl}",
-                                  texture=f"txt{t.name}-lvl{lvl}",
-                                  texrepeat="1 1", texuniform="true", reflectance="0")
-                materials[t][lvl] = m
+        assert len(options.current_specs) == 2
+        for spec, side in zip(options.current_specs, [1, -1]):
+            name = f"Item#{spec}"
 
-        # Toy textures for the robots (not working)
-        # xml.compiler.texturedir = "/home/kgd/work/code/vu/revolve_vision/"
-        # xml.asset.add('texture', name="creeper", type="cube",
-        #               file="creeper_texture.png", width=64, height=64)
-        # creeper_material = \
-        #     xml.asset.add('material', name="creeper", texture="creeper")
-
-        gh_width = .025
-        for i, x, y in [(0, 0, 1), (1, 1, 0), (2, 0, -1), (3, -1, 0)]:
-            b_height = g_size / 100
-            xml.worldbody.add('geom', name=f"border#{i}",
-                              pos=[x * (gh_size + gh_width),
-                                   y * (gh_size + gh_width), b_height],
-                              rgba=[1, 1, 1, 1],
-                              euler=[0, 0, i * math.pi / 2],
-                              type="box", size=[gh_size, gh_width, b_height])
-
-        flip = -1 if options.flipped_items else 1
-        items = Scenario._generate_items()
-        if items is not None:
-            for i, item in enumerate(items):
-                s = item.lvl
-                name = f"{item.type}#{i}#{s}"
-
-                body = xml.worldbody.add('body', name=name,
-                                         pos=[item.x, flip * item.y, 0],
-                                         mocap=True)
-                body.add('geom', name=name,
-                         # rgba=item.type.color(item_distinction),
-                         type="sphere", size=f"{i_radius} 0 0",
-                         material=materials[item.type][s].name)
+            body = xml.worldbody.add('body', name=name,
+                                     pos=[cls._items_pos[0],
+                                          cls._items_pos[1] * side,
+                                          0])
+            body.add('geom', name=name,
+                     rgba=[*cls._colors[spec], 1],
+                     type="sphere", size=f"{i_radius} 0 0")
 
         if options is not None and options.view is not None and options.view.mark_start:
             for robot in robots:

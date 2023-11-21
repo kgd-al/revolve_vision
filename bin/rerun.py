@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
-import builtins
 import json
 import logging
 import math
 import numbers
-import os
 import pprint
 import time
 from datetime import timedelta
@@ -17,13 +15,10 @@ from typing import Dict, Optional
 import cv2
 import humanize
 import numpy as np
-import pandas as pd
-from PIL.Image import Image
 from abrain import CPPN, Point
-from colorama import Fore, Style
-from matplotlib import pyplot as plt
-
 from abrain.core.genome import GIDManager
+from colorama import Fore, Style
+
 from src.default_experiment.evaluator import Evaluator, EvalOptions
 from src.evolution.common import Individual
 from src.misc.config import Config
@@ -36,6 +31,7 @@ class Options:
         self.robot: Optional[Path] = None
         self.env: Optional[Path] = None
         self.config: Optional[Path] = None
+        self.run: bool = True
         self.verbosity: int = 0
 
         self.perf_check: bool = True
@@ -46,7 +42,9 @@ class Options:
         self.save_neurons: str = str(ANNDataLogging.NONE)
         self.save_path: bool = False
 
-        self.flip_items: bool = False
+        self.debug_retina_rain = False
+
+        self.specs: str = ""
 
         self.view: bool = False
         self.speed: float = 1.0
@@ -74,6 +72,12 @@ class Options:
         parser.add_argument('-v', '--verbose', dest="verbosity", default=0,
                             action='count', help="Print more information")
 
+        parser.add_argument('--no-run', dest="run",
+                            action='store_false',
+                            help="Do not run the re-evaluation"
+                                 " (useful in conjunction with"
+                                 " --write-cppn, --draw-cppn, --write-ann)")
+
         group = parser.add_argument_group("Data collection",
                                           "Generate/Extract derived data from provided robot")
         group.add_argument('--no-performance-check', dest="perf_check",
@@ -91,9 +95,8 @@ class Options:
                                 f"Valid values are {[v.name for v in ANNDataLogging]}")
         group.add_argument('--log-trajectory', dest="save_path", action='store_true',
                            help=f"Log robot path (and instant fitness)")
-        group.add_argument('--flip-items', dest="flip_items", action='store_true',
-                           help=f"Flip items in the environment to test for robust strategy")
-
+        group.add_argument('--specs',
+                           help=f"Specific environmental conditions to test")
         group = parser.add_argument_group("Rendering",
                                           "Additional rendering flags")
         group.add_argument('--view', dest="view", action='store_true',
@@ -224,10 +227,16 @@ def main() -> int:
         save_folder = True
         options.runner.log_path = args.robot.stem + ".trajectory.dat"
 
-    options.runner.flipped_items = args.flip_items
+    options.specs = tuple(args.specs.split(";")) if args.specs else None
 
     if save_folder:
         options.runner.save_folder = args.robot.parent
+
+    print("[kgd-debug] Fixed obsolete retina configuration mapping")
+    rc = Config.RetinaConfiguration
+    rc_ = Config.retina_configuration
+    if rc_ not in list(rc):
+        Config.retina_configuration = {'2': rc.X, '3': rc.Y, '4': rc.Z}[rc_]
 
     if args.verbosity > 1:
         print("Deduced options:", end='\n\t')
@@ -242,12 +251,22 @@ def main() -> int:
     ind = Individual.from_file(args.robot)
     genome = ind.genome
 
+    # TODO REMOVE
+    # for r in ["X", "Y", "Z", "R0", "R1", "R2"]:
+    #     Config.retina_configuration = r
+    #     robot_body, robot_brain = scenario.build_robot(genome, True)
+    #     brain: abrain.ANN = robot_brain.brain
+    #     file = f"test-brain-{r}.html"
+    #     plotly_render(brain).write_html(file)
+    #     print("Generated", file, Path(file).exists())
+    #
+    # exit(42)
+
     if args.save_cppn:
         path = str(args.robot.parent.joinpath(args.robot.stem + ".cppn"))
         genome.brain.to_dot(path + ".png")
         genome.brain.to_dot(path + ".pdf")
         genome.brain.to_dot(path + ".dot")
-        return 0
 
     if args.draw_cppn:
         cppn = CPPN(genome.brain)
@@ -286,6 +305,8 @@ def main() -> int:
                 print("Generated", path)
             else:
                 print("Error generating", path)
+
+    if not args.run:
         return 0
 
     result, viewer = Evaluator.evaluate_rerun(genome, options)
@@ -297,14 +318,6 @@ def main() -> int:
 
     if args.perf_check and not defaults:
         err = performance_compare(ind.evaluation_result(), result, args.verbosity)
-
-    if options.runner.record is not None:
-        output = options.runner.save_folder.joinpath(options.runner.record.video_file_path)
-        if not os.path.exists(output):
-            print(f"Failed to generate {output}")
-            err |= 1
-        else:
-            print(f"Successfully generated {output}")
 
     if args.verbosity > 0:
         duration = humanize.precisedelta(timedelta(seconds=time.perf_counter() - start))
@@ -326,11 +339,11 @@ def performance_compare(lhs: Evaluator.Result, rhs: Evaluator.Result, verbosity)
     def s_format(s=''): return f"{s:{width}}"
 
     def f_format(f):
-        if type(f) == builtins.list:
+        if isinstance(f, numbers.Number):
             # return f"{f}"[:width-3] + "..."
-            return "\n" + pprint.pformat(f, width=width)
-        else:
             return s_format(f"{f:g}")
+        else:
+            return "\n" + pprint.pformat(f, width=width)
 
     def map_compare(lhs_d: Dict[str, float], rhs_d: Dict[str, float]):
         output, code = "", 0
@@ -367,9 +380,14 @@ def performance_compare(lhs: Evaluator.Result, rhs: Evaluator.Result, verbosity)
             output += f"{Style.RESET_ALL}\n"
         return output, code
 
-    f_str, f_code = map_compare(lhs.fitnesses, rhs.fitnesses)
-    d_str, d_code = map_compare(lhs.descriptors, rhs.descriptors)
-    s_str, s_code = map_compare(lhs.stats, rhs.stats)
+    def json_compliant(obj): return json.loads(json.dumps(obj))
+
+    f_str, f_code = map_compare(lhs.fitnesses,
+                                json_compliant(rhs.fitnesses))
+    d_str, d_code = map_compare(lhs.descriptors,
+                                json_compliant(rhs.descriptors))
+    s_str, s_code = map_compare(lhs.stats,
+                                json_compliant(rhs.stats))
     max_width = max(len(line) for text in [f_str, s_str] for line in text.split('\n'))
     if verbosity > 0:
         def header(): print("-"*max_width)

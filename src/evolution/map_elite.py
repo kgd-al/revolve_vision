@@ -1,4 +1,6 @@
+import json
 import logging
+import os
 import pprint
 import random
 import shutil
@@ -95,6 +97,11 @@ class Algorithm(Evolution):
         self.labels = labels
         self._curiosity_lut = {}
 
+        self._latest_champion = None
+        self._snapshots = run_folder.joinpath("snapshots")
+        self._snapshots.mkdir(exist_ok=False)
+        print("[kgd-debug] Created folder", self._snapshots, self._snapshots.exists())
+
         Evolution.__init__(self, container=container, name=name,
                            budget=options.budget, batch_size=options.batch_size,
                            select_or_initialise=sel_or_init, vary=vary,
@@ -107,8 +114,39 @@ class Algorithm(Evolution):
         parent = self._curiosity_lut.pop(individual.id(), None)
         if parent is not None:
             grid.curiosity[parent] += {True: 1, False: -.5}[added]
+
+        if added:
+            new_champion = False
+            if self._latest_champion is None:
+                self._latest_champion = (0, self.nb_evaluations,
+                                         individual.fitness)
+                new_champion = True
+                print("[kgd-debug] First champion:", self._latest_champion)
+            else:
+                n, timestamp, fitness = self._latest_champion
+                if individual.fitness.dominates(fitness):
+                    self._latest_champion = (n+1, self.nb_evaluations,
+                                             individual.fitness)
+                    new_champion = True
+                    print("[kgd-debug] New champion:", self._latest_champion)
+
+            if new_champion:
+                n, t, _ = self._latest_champion
+                file = self._snapshots.joinpath(f"better-{n}-{t}.json")
+                with open(file, "w") as f:
+                    json.dump(self.to_json(individual), f)
+
         return added
 
+    @classmethod
+    def to_json(cls, i: IndividualLike):
+        return {
+            "id": i.id(), "parents": i.genome.parents(),
+            "fitnesses": i.fitnesses,
+            "descriptors": i.descriptors,
+            "stats": i.stats,
+            "genome": i.genome.to_json()
+        }
 
 class Grid(containers.Grid):
     def __init__(self, **kwargs):
@@ -151,6 +189,7 @@ class Logger(algorithms.TQDMAlgorithmLogger):
     #     super()._tell(algo, ind)
 
     def summary_plots(self, **kwargs):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
         summary_plots(evals=self.evals, iterations=self.iterations,
                       grid=self.algorithms[0].container,
                       labels=self.algorithms[0].labels,
@@ -171,7 +210,7 @@ def plot_grid(data, filename, xy_range, cb_range, labels, fig_size, cmap="infern
                 extrema = max(abs(cb_range[0]), abs(cb_range[1]))
                 cb_range = (-extrema, extrema)
             else:
-                raise ValueError(f"Unkown cb_range type '{cb_range}'")
+                raise ValueError(f"Unknown cb_range type '{cb_range}'")
 
     g_shape = data.shape
     cax = ax.imshow(data.T, interpolation="none", cmap=plt.get_cmap(cmap),

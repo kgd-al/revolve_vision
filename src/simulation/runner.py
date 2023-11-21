@@ -17,13 +17,16 @@ from mujoco import MjModel, MjData
 from mujoco_viewer import mujoco_viewer
 from pyrr import Vector3, Quaternion
 
-from revolve2.core.modular_robot import ModularRobot
 from revolve2.core.physics.environment_actor_controller import \
     EnvironmentActorController
 from revolve2.core.physics.running import Environment
 from revolve2.core.physics.running import PosedActor, ActorControl
 from revolve2.runners.mujoco import LocalRunner
 from revolve2.runners.mujoco._local_runner import mjcf
+
+from revolve2.actor_controller import ActorController
+from revolve2.core.physics.actor import Actor
+
 from .vision import OpenGLVision
 from ..misc.config import Config
 
@@ -71,10 +74,12 @@ class RunnerOptions:
         fps: int = 24
     record: Optional[Record] = None
 
-    flipped_items: bool = False
+    current_specs: str = ""
 
     save_folder: Optional[Path] = None
     ann_data_logging: ANNDataLogging = ANNDataLogging.NONE
+
+    debug_retina_brain = False
 
     log_path: Optional[str] = None
 
@@ -94,7 +99,8 @@ class Runner(LocalRunner):
     environmentActorController_t = DefaultEnvironmentActorController
     actorController_t = DefaultActorControl
 
-    def __init__(self, robot: ModularRobot, options: RunnerOptions,
+    def __init__(self, robot_body: Actor, robot_brain: ActorController,
+                 options: RunnerOptions,
                  env_seeder: Callable[[mjcf.RootElement, RunnerOptions], None],
                  callbacks: Optional[RunnerCallbacks] = None,
                  position: Optional[Vector3] = None):
@@ -107,7 +113,7 @@ class Runner(LocalRunner):
         if callbacks is not None:
             self.callbacks.update(callbacks)
 
-        actor, controller = robot.make_actor_and_controller()
+        actor, controller = robot_body, robot_brain
         bounding_box = actor.calc_aabb()
         env = Environment(self.environmentActorController_t(controller))
 
@@ -148,6 +154,8 @@ class Runner(LocalRunner):
         self.headless = options is None or (options.view is None and options.record is None)
         if not self.headless:
             self.prepare_view(options)
+
+        self.running = True
 
     def prepare_view(self, options):
         record = (options.record is not None)
@@ -288,7 +296,8 @@ class Runner(LocalRunner):
                 self.options.save_folder.joinpath(self.options.ann_data_file)
             )
 
-        while (time := self.data.time) < Config.simulation_time:
+        while (self.running and
+               (time := self.data.time) < Config.simulation_time):
             # do control if it is time
             is_control_step = (time >= last_control_time + control_step)
 

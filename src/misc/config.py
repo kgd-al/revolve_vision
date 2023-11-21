@@ -11,13 +11,17 @@ import abrain
 
 
 class Config:
-    simulation_time: Annotated[float, "Duration of the simulation"] = 10
+    simulation_time: Annotated[float, "Duration of the simulation"] = 5
     control_frequency: Annotated[float, "How frequently to call the controller"] = 10
 
-    ground_size: Annotated[float, "Total size of the arena"] = 10
-    item_size: Annotated[float, "Size of an object"] = .1
-    item_levels: Annotated[list[float], "Difficulty levels"] = [.0, .1, .2, .3]
-    item_count: Annotated[int, "Number of items"] = 3*2*len(item_levels)
+    env_specifications = (
+        "RG", "GR", "RB", "BR",
+        "GB", "BG", "YM", "MY",
+        "YC", "CY", "MC", "CM"
+    )
+
+    ground_size = 2
+    item_size = .1
 
     abrain = abrain.Config
 
@@ -29,22 +33,24 @@ class Config:
     opengl_lib: Annotated[str, "OpenGL back-end for vision"] = OpenGLLib.EGL.name
 
     class RetinaConfiguration(str, Enum):
-        R = auto()   # Chaotic, single-layer
+        R0 = "R0"   # Chaotic, single-layer
+        R1 = "R1"   # # with different
+        R2 = "R2"   # # seeds
         # Mangled
-        X = auto()      # side-by-side
-        Y = auto()      # different depths
-        Z = auto()      # on top of one another
-        # Retina mimicking
-        R0 = auto()     # poor
-        R1 = auto()     # better
-        R2 = auto()     # best
+        X = "X"      # side-by-side
+        Y = "Y"      # different depths
+        Z = "Z"      # on top of one another
+        # Retina mimicking (with cell types)
+        C0 = "C0"     # Simplest
+        C1 = "C1"     # Average
+        C2 = "C2"     # Complex
 
     retina_configuration: Annotated[RetinaConfiguration,
                                     "Mapping of the 3D camera to the 3D substrate"] = \
         RetinaConfiguration.Y
 
     with_vision: Annotated[bool, "Activate/deactivate visual inputs"] = True
-    vision_mutation_rate: Annotated[float, "Mutation rate for the retina"] = .1
+    vision_mutation_rate: Annotated[float, "Mutation rate for the retina"] = 0
     vision_mutation_range = ((3, 10), (2, 10))
 
     class BodyType(str, Enum):
@@ -53,6 +59,10 @@ class Config:
         SPIDER = auto()
         TORSO = auto()
     body_type: Annotated[BodyType, "Morphological specification"] = BodyType.GECKO
+
+    debug_retina_brain: Annotated[
+        bool, ("Provide very verbose logging information about"
+               " camera/retina/brain mapping")] = False
 
     @classmethod
     def write_json(cls, file: Path):
@@ -101,12 +111,15 @@ class Config:
     def _set_items(cls, dct):
         for k, v in dct.items():
             attr = getattr(cls, k, None)
+            if isinstance(attr, tuple):
+                v = tuple(v)
             if not isclass(attr):
                 setattr(cls, k, v)
 
     @staticmethod
     def _get_items(cls):
-        return {k: v_ for k in dir(cls) if (v_ := Config._value(cls, k))}
+        return {k: v_ for k in dir(cls)
+                if (v_ := Config._value(cls, k)) is not None}
 
     @staticmethod
     def _value(cls, key):
@@ -122,5 +135,4 @@ class Config:
                 attr = None
         elif callable(attr):
             attr = None
-
         return attr
