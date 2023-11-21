@@ -1,7 +1,7 @@
 .idea/
 *.egg-info/
-tmp/
-remote/
+tmp
+remote
 stash/
 __pycache__
 
