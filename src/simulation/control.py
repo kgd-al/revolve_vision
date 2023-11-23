@@ -4,6 +4,7 @@ from pathlib import Path
 from random import Random
 from typing import List, Tuple, Optional
 
+import cv2
 import numpy as np
 from mujoco import MjModel, MjData
 from revolve2.serialization import StaticData, Serializable
@@ -87,9 +88,13 @@ class ANNControl:
             if self.vision is not None:
                 img = self.vision.process(data.model, data.data)
                 self.i_buffer[off:] = [x / 255 for x in img.flat]
-
-                # cv2.imwrite(f'vision_{self._step:010d}.png',
-                #             cv2.cvtColor(np.flipud(img), cv2.COLOR_RGBA2BGR))
+                #
+                # if Config.debug_retina_brain:
+                #     print("Verbose debug logging of retina data")
+                #
+                #     cv2.imwrite(f'vision_{self._step:010d}.png',
+                #                 cv2.cvtColor(np.flipud(img),
+                #                              cv2.COLOR_RGBA2BGR))
                 # if self._step == 0:
                 #     print(img)
                 # header = f"step {self._step}"

@@ -177,10 +177,14 @@ def main() -> int:
 
     if args.verbosity <= 0:
         logging.basicConfig(level=logging.WARNING)
-    elif args.verbosity == 1:
+    elif args.verbosity <= 2:
         logging.basicConfig(level=logging.INFO)
     else:
         logging.basicConfig(level=logging.DEBUG)
+
+    for m in ['OpenGL.arrays.arraydatatype', 'OpenGL.acceleratesupport']:
+        logger = logging.getLogger(m)
+        logger.setLevel(logging.WARNING)
 
     if args.verbosity >= 2:
         print("Command line-arguments:")
@@ -227,16 +231,18 @@ def main() -> int:
         save_folder = True
         options.runner.log_path = args.robot.stem + ".trajectory.dat"
 
-    options.specs = tuple(args.specs.split(";")) if args.specs else None
+    save_folder |= Config.debug_retina_brain
 
     if save_folder:
         options.runner.save_folder = args.robot.parent
 
-    print("[kgd-debug] Fixed obsolete retina configuration mapping")
-    rc = Config.RetinaConfiguration
-    rc_ = Config.retina_configuration
-    if rc_ not in list(rc):
-        Config.retina_configuration = {'2': rc.X, '3': rc.Y, '4': rc.Z}[rc_]
+    options.specs = tuple(args.specs.split(";")) if args.specs else None
+
+    # print("[kgd-debug] Fixed obsolete retina configuration mapping")
+    # rc = Config.RetinaConfiguration
+    # rc_ = Config.retina_configuration
+    # if rc_ not in list(rc):
+    #     Config.retina_configuration = {'2': rc.X, '3': rc.Y, '4': rc.Z}[rc_]
 
     if args.verbosity > 1:
         print("Deduced options:", end='\n\t')
@@ -319,7 +325,7 @@ def main() -> int:
     if args.perf_check and not defaults:
         err = performance_compare(ind.evaluation_result(), result, args.verbosity)
 
-    if args.verbosity > 0:
+    if args.verbosity > 1:
         duration = humanize.precisedelta(timedelta(seconds=time.perf_counter() - start))
         print(f"Evaluated {args.robot.absolute().resolve()} in {duration} / {Config.simulation_time}s")
 
@@ -389,7 +395,16 @@ def performance_compare(lhs: Evaluator.Result, rhs: Evaluator.Result, verbosity)
     s_str, s_code = map_compare(lhs.stats,
                                 json_compliant(rhs.stats))
     max_width = max(len(line) for text in [f_str, s_str] for line in text.split('\n'))
-    if verbosity > 0:
+    if verbosity == 1:
+        summary = []
+        codes = {0: Fore.GREEN, 1: Fore.RED}
+        for code, name in [(f_code, "fitness"),
+                           (d_code, "descriptors"),
+                           (s_code, "stats")]:
+            summary.append(f"{codes[code]}{name}{Style.RESET_ALL}")
+        print(f"Performance summary: {lhs.fitnesses} ({' '.join(summary)})")
+
+    elif verbosity > 1:
         def header(): print("-"*max_width)
         print("Performance summary:")
         header()

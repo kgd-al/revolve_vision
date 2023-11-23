@@ -1,29 +1,23 @@
 import logging
-import logging
 import math
 import os
-import pprint
-from dataclasses import dataclass
-from enum import Enum
 from functools import lru_cache
-from random import Random
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, Dict, Tuple
 
 import abrain
 import cv2
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt, collections
-from matplotlib.axes import Axes
-from matplotlib.figure import Figure
 from mujoco import MjData, MjModel
-from pyrr import Vector3
 from revolve2.core.modular_robot import Body, Brick, ActiveHinge, ModularRobot, Module
 
-from ..misc.genome import RVGenome
 from ..misc.config import Config
+from ..misc.genome import RVGenome
 from ..simulation.control import ANNControl, SensorControlData
 from ..simulation.runner import Runner, RunnerOptions
+
+logger = logging.getLogger(__name__)
 
 
 # ==============================================================================
@@ -121,7 +115,7 @@ class Scenario:
         if runner.options.log_path:
             self.path_log_path = (
                 runner.options.save_folder.joinpath(runner.options.log_path))
-            logging.info(f"Logging path to {self.path_log_path}")
+            logger.debug(f"Logging path to {self.path_log_path}")
             self.path_logger = open(self.path_log_path, 'w')
             self.path_logger.write(f"X Y\n")
 
@@ -130,52 +124,53 @@ class Scenario:
             # self.path_logger.write(f"{self.collected is not None}"
             #                        f" {self.local_fitness()[1]}")
             self.path_logger.close()
-            logging.info(f"Generated {self.path_log_path}")
+            logger.debug(f"Generated {self.path_log_path}")
 
     @classmethod
     def aggregate(cls, folders, fitnesses, options):
-        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        if options.log_path:
+            os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-        n = len(folders)
-        n_rows = math.floor(math.sqrt(n))
-        n_cols = n // n_rows
-        fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols,
-                                 sharex="all", sharey="all",
-                                 subplot_kw=dict(box_aspect=1))
-        for ax, f in zip(axes.flatten(), folders):
-            spec = f.stem
-            df = pd.read_csv(f.joinpath(options.log_path), sep=' ')
-            contact, success = fitnesses[spec]
-            # df = df.iloc[:-1].astype(float)
-            ax.add_collection(collections.EllipseCollection(
-                widths=2*Config.item_size, heights=2*Config.item_size,
-                angles=0, units='xy', facecolors=list(f.stem.lower()),
-                offsets=[(cls._items_pos[0], i*cls._items_pos[1])
-                         for i in [1, -1]],
-                offset_transform=ax.transData
-            ))
+            n = len(folders)
+            n_rows = math.floor(math.sqrt(n))
+            n_cols = n // n_rows
+            fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols,
+                                     sharex="all", sharey="all",
+                                     subplot_kw=dict(box_aspect=1))
+            for ax, f in zip(axes.flatten(), folders):
+                spec = f.stem
+                df = pd.read_csv(f.joinpath(options.log_path), sep=' ')
+                contact, success = fitnesses[spec]
+                # df = df.iloc[:-1].astype(float)
+                ax.add_collection(collections.EllipseCollection(
+                    widths=2*Config.item_size, heights=2*Config.item_size,
+                    angles=0, units='xy', facecolors=list(f.stem.lower()),
+                    offsets=[(cls._items_pos[0], i*cls._items_pos[1])
+                             for i in [1, -1]],
+                    offset_transform=ax.transData
+                ))
 
-            color = "k"
-            if contact:
-                color = {-1: 'r', 1: 'g'}.get(success, 'b')
+                color = "k"
+                if contact:
+                    color = {-1: 'r', 1: 'g'}.get(success, 'b')
 
-            ax.plot(df.X, df.Y, color=color)
+                ax.plot(df.X, df.Y, color=color)
 
-            hgs = .5 * Config.ground_size
-            ax.set_xlim(-hgs, hgs)
-            # ax.set_xlabel("X")
-            ax.set_ylim(-hgs, hgs)
-            # ax.set_ylabel("Y")
-            ax.set_title(f"{spec}: {success:g}")
-            # ax.set_box_aspect(1)
+                hgs = .5 * Config.ground_size
+                ax.set_xlim(-hgs, hgs)
+                # ax.set_xlabel("X")
+                ax.set_ylim(-hgs, hgs)
+                # ax.set_ylabel("Y")
+                ax.set_title(f"{spec}: {round(success, 4):g}")
+                # ax.set_box_aspect(1)
 
-        fitness = cls.fitness(fitnesses, Config.env_specifications)
+            fitness = cls.fitness(fitnesses, Config.env_specifications)
 
-        path = options.save_folder.joinpath(options.log_path).with_suffix('.png')
-        fig.suptitle(f"Fitness: {fitness:g}")
-        fig.tight_layout()
-        fig.savefig(path, bbox_inches='tight')
-        print("Generated", path)
+            path = options.save_folder.joinpath(options.log_path).with_suffix('.png')
+            fig.suptitle(f"Fitness: {fitness:g}")
+            fig.tight_layout()
+            fig.savefig(path, bbox_inches='tight')
+            logger.info(f"Generated {path}")
 
     def subject_position(self):
         return self.runner.get_actor_state(0).position
@@ -206,6 +201,9 @@ class Scenario:
 
         if self.runner.options.log_path:
             self.path_logger.write(f"{p1.x} {p1.y}\n")
+
+        if Config.debug_retina_brain:
+            self._debug_retina_step()
 
         self._steps += 1
 
@@ -256,10 +254,18 @@ class Scenario:
             x, y = self._items_pos
             def d(i0, j0, i1, j1): return math.sqrt((i1-i0)**2 + (j1-j0)**2)
 
-            d_min = min([
-                d(x1, y1, x, i*y) / d(x0, y0, x, i*y) for i in [-1, 1]
-            ])
-            score = .1 * (1 - d_min)
+            # (v0) Strict version -> rewards getting close to the correct object
+            i = np.argmax([self._fitness(s) for s
+                          in self.runner.options.current_specs])
+            y *= i * -1
+            d = d(x1, y1, x, y) / d(x0, y0, x, y)
+
+            # (v1) Nice version -> rewards getting close to any object
+            # d = min([
+            #     d(x1, y1, x, i*y) / d(x0, y0, x, i*y) for i in [-1, 1]
+            # ])
+
+            score = .1 * (1 - d)
             return False, score
 
     @classmethod
@@ -324,6 +330,80 @@ class Scenario:
                "connectivity": (0, 1),
                "ipsilateral": (-1, 1)}
         return [dct[k] for k in Scenario.descriptor_names()]
+
+    # ==========================================================================
+
+    def _debug_retina_step(self):
+        controller = self.runner.controller.actor_controller
+
+        if self._steps == 0:
+            os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
+            brain = controller.brain
+            neurons = {n.pos: n for n in brain.neurons()}
+
+            self.__retina_neurons = {k: [] for k in "RGB"}
+            for p, lbl in controller.labels.items():
+                if lbl[0] in "RGB":
+                    self.__retina_neurons[lbl[0]].append(
+                        (p.tuple(), neurons[p], lbl))
+            # pprint.pprint(self.__retina_neurons)
+
+        aspect = controller.vision.height / controller.vision.width
+        fig, axes = plt.subplots(2, 3,
+                                 sharex='all', sharey='all',
+                                 figsize=(10, 10*aspect))
+
+        img = controller.vision.img
+        cv2.imwrite(str(self.runner.options.save_folder
+                        .joinpath(f'vision_{self._steps:010d}.png')),
+                    cv2.cvtColor(np.flipud(img),
+                                 cv2.COLOR_RGBA2BGR))
+
+        img_extents = (-1.5, 1.5, -1.5, 1.5)
+        cmaps = {"R": lambda v: [v, 0, 0],
+                 "G": lambda v: [0, v, 0],
+                 "B": lambda v: [0, 0, v]}
+
+        for i, (k, layer) in enumerate(self.__retina_neurons.items()):
+            # pprint.pprint(list(zip(*layer)))
+            ps, ns, lbls = zip(*layer)
+            xs, ys, zs = zip(*ps)
+
+            cmap = cmaps[k]
+            vs = [cmap(n.value) for n in ns]
+            print(k, vs)
+
+            ax = axes[1, i]
+            # ax.set_box_aspect(aspect)
+            ax.scatter(xs, zs, c=vs, edgecolors='white')
+            for x, z, lbl in zip(xs, zs, lbls):
+                # print(lbl, x, z)
+                dz = 1 if z < 1 else -1
+                ax.annotate(lbl, (x, z), (0, 1.5 * dz),
+                            bbox=dict(facecolor='white', alpha=1),
+                            textcoords='offset fontsize',
+                            ha='center', va='center')
+            ax.imshow(img[:, :, i], extent=img_extents,
+                      cmap='gray', vmin=0, vmax=255)
+
+        axes[0, 1].imshow(img, extent=img_extents)
+
+        axes[0, 0].axis('off')
+        axes[0, 2].axis('off')
+
+        fig.tight_layout()
+        fig.savefig(self.runner.options.save_folder
+                    .joinpath(f"vision_{self._steps:010d}.png"),
+                    bbox_inches='tight')
+        plt.close()
+        # exit(42)
+
+        # pprint.pprint(img)
+        #
+        # neurons = {k: [
+        #     brain.neurons()[(x, y, z)]
+        # ] for k, layer in self.__layers.items()}
 
     # ==========================================================================
 

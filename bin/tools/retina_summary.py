@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from colorama import Fore, Style
+from matplotlib import patches
 from matplotlib.axes import Axes
 from scipy.stats import mannwhitneyu
 
@@ -121,6 +122,10 @@ def main():
         "qd_score": "QD Score",
     }
 
+    # quantiles = [0, .05, .125, .25, .325, .5, .625, .75, .875, .95, 1]
+    quantiles = [0, .05, .25, .5, .75, .95, 1]
+    alpha_inc = 1 / (len(quantiles) // 2 + 1)
+
     # pprint.pprint(time_data)
     variables = list(time_data.keys())
     # print(f"{variables=}")
@@ -139,13 +144,21 @@ def main():
             ax.yaxis.grid(linestyle='dashed')
             d = time_data[v][g]
             # pprint.pprint(d)
-            qtls = np.quantile(d, [0, .05, .25, .5, .75, .95, 1],
-                               axis=1, method="closest_observation")
+            qtls = np.quantile(d, quantiles, axis=1,
+                               method="closest_observation")
 
-            for j in range(3):
+            handles = []
+            for j in range(len(quantiles) // 2):
                 ax.fill_between(index, qtls[j], qtls[-j-1],
-                                alpha=.25, color=color(i))
-            ax.plot(index, qtls[3], color=color(i))
+                                alpha=alpha_inc, color=color(i))
+                handles.append(
+                    patches.Patch(color=color(i),
+                                  alpha=alpha_inc*(j+1),
+                                  label=f"{100*quantiles[j]:g}"
+                                        f"-{100*quantiles[-j-1]:g}%"))
+            handles.append(
+                ax.plot(index, qtls[3], color=color(i), label="50%")[0])
+            ax.legend(handles=handles)
 
         for ax, group in zip(axes[:, -1].flatten(), zip(*(iter(groups),) * 3)):
             subgroup = np.concatenate([time_data[v][g] for g in group], axis=1)
