@@ -78,6 +78,10 @@ class ANNControl:
 
             self._step = 0
 
+        def reset(self):
+            self.brain.reset()
+            self._step = 0
+
         def get_dof_targets(self) -> List[float]:
             return [self.o_buffer[i] for i in range(len(self.o_buffer))]
 
@@ -88,17 +92,6 @@ class ANNControl:
             if self.vision is not None:
                 img = self.vision.process(data.model, data.data)
                 self.i_buffer[off:] = [x / 255 for x in img.flat]
-                #
-                # if Config.debug_retina_brain:
-                #     print("Verbose debug logging of retina data")
-                #
-                #     cv2.imwrite(f'vision_{self._step:010d}.png',
-                #                 cv2.cvtColor(np.flipud(img),
-                #                              cv2.COLOR_RGBA2BGR))
-                # if self._step == 0:
-                #     print(img)
-                # header = f"step {self._step}"
-                # print(f"== {header} {'=' * (80 - len(header) - 4)}\n{img}")
 
             self._step += 1
 

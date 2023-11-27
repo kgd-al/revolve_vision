@@ -1,6 +1,7 @@
 import logging
 import math
 import os
+import pprint
 from functools import lru_cache
 from typing import Optional, Dict, Tuple
 
@@ -126,6 +127,9 @@ class Scenario:
             self.path_logger.close()
             logger.debug(f"Generated {self.path_log_path}")
 
+        if Config.debug_retina_brain:
+            self._debug_retina(end=True)
+
     @classmethod
     def aggregate(cls, folders, fitnesses, options):
         if options.log_path:
@@ -203,7 +207,7 @@ class Scenario:
             self.path_logger.write(f"{p1.x} {p1.y}\n")
 
         if Config.debug_retina_brain:
-            self._debug_retina_step()
+            self._debug_retina()
 
         self._steps += 1
 
@@ -255,15 +259,21 @@ class Scenario:
             def d(i0, j0, i1, j1): return math.sqrt((i1-i0)**2 + (j1-j0)**2)
 
             # (v0) Strict version -> rewards getting close to the correct object
-            i = np.argmax([self._fitness(s) for s
-                          in self.runner.options.current_specs])
-            y *= i * -1
-            d = d(x1, y1, x, y) / d(x0, y0, x, y)
+            if Config.fitness == "v0":
+                i = np.argmax([self._fitness(s) for s
+                               in self.runner.options.current_specs])
+                y *= i * -1
+                d = d(x1, y1, x, y) / d(x0, y0, x, y)
 
             # (v1) Nice version -> rewards getting close to any object
-            # d = min([
-            #     d(x1, y1, x, i*y) / d(x0, y0, x, i*y) for i in [-1, 1]
-            # ])
+            elif Config.fitness == "v1":
+                d = min([
+                    d(x1, y1, x, i*y) / d(x0, y0, x, i*y) for i in [-1, 1]
+                ])
+
+            else:
+                d = 0
+                logger.error("No fitness config value!")
 
             score = .1 * (1 - d)
             return False, score
@@ -333,77 +343,132 @@ class Scenario:
 
     # ==========================================================================
 
-    def _debug_retina_step(self):
+    def _debug_retina(self, end=False):
         controller = self.runner.controller.actor_controller
-
-        if self._steps == 0:
-            os.environ["QT_QPA_PLATFORM"] = "offscreen"
-
+        iw, ih = controller.vision.width, controller.vision.height
+        if not end:
             brain = controller.brain
-            neurons = {n.pos: n for n in brain.neurons()}
 
-            self.__retina_neurons = {k: [] for k in "RGB"}
-            for p, lbl in controller.labels.items():
-                if lbl[0] in "RGB":
-                    self.__retina_neurons[lbl[0]].append(
-                        (p.tuple(), neurons[p], lbl))
-            # pprint.pprint(self.__retina_neurons)
+            if self._steps == 0:
 
-        aspect = controller.vision.height / controller.vision.width
-        fig, axes = plt.subplots(2, 3,
-                                 sharex='all', sharey='all',
-                                 figsize=(10, 10*aspect))
+                self._img_logger = pd.DataFrame(
+                    columns=[f"{c}{i}{j}" for j in range(ih) for i in range(iw) for c in "RGB"])
 
-        img = controller.vision.img
-        cv2.imwrite(str(self.runner.options.save_folder
-                        .joinpath(f'vision_{self._steps:010d}.png')),
-                    cv2.cvtColor(np.flipud(img),
-                                 cv2.COLOR_RGBA2BGR))
+                self._inputs_logger = pd.DataFrame(
+                    columns=[f"I{i}" for i in range(len(brain.ibuffer()))]
+                )
 
-        img_extents = (-1.5, 1.5, -1.5, 1.5)
-        cmaps = {"R": lambda v: [v, 0, 0],
-                 "G": lambda v: [0, v, 0],
-                 "B": lambda v: [0, 0, v]}
+            img = controller.vision.img
+            # pprint.pprint(img)
+            # pprint.pprint([[[f"{c}{i}{j}" for c in "RGB"] for i in range(iw)] for j in range(ih)])
+            # print(list(self._img_logger.columns))
+            # print(img.flatten())
+            self._img_logger.loc[self._steps] = [x / 255 for x in img.flatten()]
+            cv2.imwrite(str(self.runner.options.save_folder
+                            .joinpath(f'vision_{self._steps:010d}.png')),
+                        cv2.cvtColor(np.flipud(img),
+                                     cv2.COLOR_RGBA2BGR))
 
-        for i, (k, layer) in enumerate(self.__retina_neurons.items()):
-            # pprint.pprint(list(zip(*layer)))
-            ps, ns, lbls = zip(*layer)
-            xs, ys, zs = zip(*ps)
+            inputs = brain.ibuffer()
+            self._inputs_logger.loc[self._steps] = inputs.tuple()
 
-            cmap = cmaps[k]
-            vs = [cmap(n.value) for n in ns]
-            print(k, vs)
+        else:
+            self._img_logger.to_csv(
+                self.runner.options.save_folder.joinpath('debug.img.dat'))
+            self._inputs_logger.to_csv(
+                self.runner.options.save_folder.joinpath('debug.inputs.dat'))
+            self._neurons_logger = pd.read_csv(controller._ann_log_file.name,
+                                               sep=' ', index_col="Step")
 
-            ax = axes[1, i]
-            # ax.set_box_aspect(aspect)
-            ax.scatter(xs, zs, c=vs, edgecolors='white')
-            for x, z, lbl in zip(xs, zs, lbls):
-                # print(lbl, x, z)
-                dz = 1 if z < 1 else -1
-                ax.annotate(lbl, (x, z), (0, 1.5 * dz),
-                            bbox=dict(facecolor='white', alpha=1),
-                            textcoords='offset fontsize',
-                            ha='center', va='center')
-            ax.imshow(img[:, :, i], extent=img_extents,
-                      cmap='gray', vmin=0, vmax=255)
+            print(self._img_logger.columns)
+            print(self._inputs_logger.columns)
+            print(self._neurons_logger.columns)
 
-        axes[0, 1].imshow(img, extent=img_extents)
+            img_neurons_mapper = {
+                s: label
+                for s in self._neurons_logger.columns
+                if (label := "".join(c for c in s.split(":")[1] if c not in "[,]"))
+                in self._img_logger.columns
+            }
+            pprint.pprint(img_neurons_mapper)
 
-        axes[0, 0].axis('off')
-        axes[0, 2].axis('off')
+            for c_img, c_input, c_neuron in zip(
+                    self._img_logger.columns,
+                    self._inputs_logger.columns[8:],
+                    self._neurons_logger.columns[8:]):
+                print(c_img, c_input, c_neuron, img_neurons_mapper[c_neuron])
 
-        fig.tight_layout()
-        fig.savefig(self.runner.options.save_folder
-                    .joinpath(f"vision_{self._steps:010d}.png"),
-                    bbox_inches='tight')
-        plt.close()
-        # exit(42)
+            assert (len(self._img_logger) == len(self._inputs_logger)
+                    == len(self._neurons_logger))
 
-        # pprint.pprint(img)
+        # if self._steps == 0:
+        #     os.environ["QT_QPA_PLATFORM"] = "offscreen"
         #
-        # neurons = {k: [
-        #     brain.neurons()[(x, y, z)]
-        # ] for k, layer in self.__layers.items()}
+        #     brain = controller.brain
+        #     neurons = {n.pos: n for n in brain.neurons()}
+        #
+        #     self.__retina_neurons = {k: [] for k in "RGB"}
+        #     for p, lbl in controller.labels.items():
+        #         if lbl[0] in "RGB":
+        #             self.__retina_neurons[lbl[0]].append(
+        #                 (p.tuple(), neurons[p], lbl))
+        #     # pprint.pprint(self.__retina_neurons)
+        #
+        # aspect = controller.vision.height / controller.vision.width
+        # fig, axes = plt.subplots(2, 3,
+        #                          sharex='all', sharey='all',
+        #                          figsize=(10, 10*aspect))
+        #
+        # img = controller.vision.img
+        # cv2.imwrite(str(self.runner.options.save_folder
+        #                 .joinpath(f'vision_{self._steps:010d}.png')),
+        #             cv2.cvtColor(np.flipud(img),
+        #                          cv2.COLOR_RGBA2BGR))
+        #
+        # img_extents = (-1.5, 1.5, -1.5, 1.5)
+        # cmaps = {"R": lambda v: [v, 0, 0],
+        #          "G": lambda v: [0, v, 0],
+        #          "B": lambda v: [0, 0, v]}
+        #
+        # for i, (k, layer) in enumerate(self.__retina_neurons.items()):
+        #     # pprint.pprint(list(zip(*layer)))
+        #     ps, ns, lbls = zip(*layer)
+        #     xs, ys, zs = zip(*ps)
+        #
+        #     cmap = cmaps[k]
+        #     vs = [cmap(n.value) for n in ns]
+        #     print(k, vs)
+        #
+        #     ax = axes[1, i]
+        #     # ax.set_box_aspect(aspect)
+        #     ax.scatter(xs, zs, c=vs, edgecolors='white')
+        #     for x, z, lbl in zip(xs, zs, lbls):
+        #         # print(lbl, x, z)
+        #         dz = 1 if z < 1 else -1
+        #         ax.annotate(lbl, (x, z), (0, 1.5 * dz),
+        #                     bbox=dict(facecolor='white', alpha=1),
+        #                     textcoords='offset fontsize',
+        #                     ha='center', va='center')
+        #     ax.imshow(img[:, :, i], extent=img_extents,
+        #               cmap='gray', vmin=0, vmax=255)
+        #
+        # axes[0, 1].imshow(img, extent=img_extents)
+        #
+        # axes[0, 0].axis('off')
+        # axes[0, 2].axis('off')
+        #
+        # fig.tight_layout()
+        # fig.savefig(self.runner.options.save_folder
+        #             .joinpath(f"vision_{self._steps:010d}.png"),
+        #             bbox_inches='tight')
+        # plt.close()
+        # # exit(42)
+        #
+        # # pprint.pprint(img)
+        # #
+        # # neurons = {k: [
+        # #     brain.neurons()[(x, y, z)]
+        # # ] for k, layer in self.__layers.items()}
 
     # ==========================================================================
 

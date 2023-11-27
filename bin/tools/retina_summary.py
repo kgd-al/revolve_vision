@@ -4,6 +4,7 @@ import json
 import math
 import pprint
 import pickle
+import sys
 from pathlib import Path
 from functools import reduce
 import pandas as pd
@@ -16,12 +17,18 @@ from scipy.stats import mannwhitneyu
 
 
 def main():
+    base_folder = Path("remote/identify_v1")
+    if len(sys.argv) > 1:
+        print(sys.argv)
+        base_folder = Path(sys.argv[1])
+
     data = []
     hist_data, time_data = {}, {}
     groups = set()
     budgets, iterations = set(), set()
-    base_folder = Path("remote/identify_v1")
-    for folder in base_folder.glob("*100K"):
+    folders = list(base_folder.glob("*100K"))
+    assert len(folders) > 0, f"No run folder found under {base_folder}"
+    for folder in folders:
         file = folder.joinpath("best.json")
         if not file.exists():
             continue

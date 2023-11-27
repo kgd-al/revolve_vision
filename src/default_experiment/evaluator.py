@@ -136,7 +136,7 @@ class Evaluator:
 
                 brain_controller = runner.controller.actor_controller
                 assert brain is brain_controller.brain
-                brain.reset()
+                brain_controller.reset()
 
                 if genome.with_vision():
                     brain_controller.vision = \

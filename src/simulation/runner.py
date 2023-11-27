@@ -1,4 +1,6 @@
+
 import math
+import os
 import os.path
 from ast import literal_eval
 from collections import namedtuple
@@ -9,24 +11,27 @@ from functools import partial
 from pathlib import Path
 from typing import Callable, Dict, Optional, Union
 
+if "DISPLAY" in os.environ:
+    import glfw
+else:
+    import warnings
+    warnings.filterwarnings("ignore", message='.*DISPLAY.*missing')
+
 import cv2
-import glfw
 import mujoco
 import numpy as np
 from mujoco import MjModel, MjData
 from mujoco_viewer import mujoco_viewer
 from pyrr import Vector3, Quaternion
-
+from revolve2.actor_controller import ActorController
+from revolve2.core.physics.actor import Actor
 from revolve2.core.physics.environment_actor_controller import \
     EnvironmentActorController
 from revolve2.core.physics.running import Environment
 from revolve2.core.physics.running import PosedActor, ActorControl
+
 from revolve2.runners.mujoco import LocalRunner
 from revolve2.runners.mujoco._local_runner import mjcf
-
-from revolve2.actor_controller import ActorController
-from revolve2.core.physics.actor import Actor
-
 from .vision import OpenGLVision
 from ..misc.config import Config
 
@@ -155,7 +160,7 @@ class Runner(LocalRunner):
         if not self.headless:
             self.prepare_view(options)
 
-        self.running = True
+        self.running = False
 
     def prepare_view(self, options):
         record = (options.record is not None)
@@ -296,6 +301,7 @@ class Runner(LocalRunner):
                 self.options.save_folder.joinpath(self.options.ann_data_file)
             )
 
+        self.running = True
         while (self.running and
                (time := self.data.time) < Config.simulation_time):
             # do control if it is time
@@ -331,6 +337,8 @@ class Runner(LocalRunner):
 
             if not self.headless:
                 self.update_view(time)
+
+        self.running = False
 
         if self.options.ann_data_logging != ANNDataLogging.NONE:
             self.controller.actor_controller.stop_log_ann_data()

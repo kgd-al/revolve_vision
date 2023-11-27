@@ -238,11 +238,11 @@ def main() -> int:
 
     options.specs = tuple(args.specs.split(";")) if args.specs else None
 
-    # print("[kgd-debug] Fixed obsolete retina configuration mapping")
-    # rc = Config.RetinaConfiguration
-    # rc_ = Config.retina_configuration
-    # if rc_ not in list(rc):
-    #     Config.retina_configuration = {'2': rc.X, '3': rc.Y, '4': rc.Z}[rc_]
+    rc = Config.RetinaConfiguration
+    rc_ = Config.retina_configuration
+    if rc_ not in list(rc):
+        print("[kgd-debug] Fixed obsolete retina configuration mapping")
+        Config.retina_configuration = {'2': rc.X, '3': rc.Y, '4': rc.Z}[rc_]
 
     if args.verbosity > 1:
         print("Deduced options:", end='\n\t')

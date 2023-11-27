@@ -19,14 +19,18 @@ fi
 host=ripper$i
 base=$user@$host:data/revolve/
 
-exp='identify_v1'
+exp='identify_v*'
 
 info=""
 # info=--info=progress2
 rsync -avzh $info $base/ remote -f '+ '$exp'/' -f '+ *-100K/' -f '+ *.json' -f '+ iteration-final.p' -f '+ plots/' -f '+ snapshots' -f '+ *.png' -f '+ *.mp4' -f '+ *.dot' -f '- *'
 
 [ -z ${VIRTUAL_ENV+x} ] && source ~/work/code/vu/venv/bin/activate
-./bin/tools/retina_summary.py
+
+for f in remote/$exp
+do
+  ./bin/tools/retina_summary.py $f
+done
 
 # groups=$(ls -d remote/collect_v3/*/ | cut -d '-' -f 2 | sort -u)
 # echo $groups

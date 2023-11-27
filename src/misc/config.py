@@ -11,6 +11,8 @@ import abrain
 
 
 class Config:
+    fitness: Annotated[str, "Fitness type"] = "v0"
+
     simulation_time: Annotated[float, "Duration of the simulation"] = 5
     control_frequency: Annotated[float, "How frequently to call the controller"] = 10
 
