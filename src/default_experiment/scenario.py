@@ -385,22 +385,47 @@ class Scenario:
             print(self._neurons_logger.columns)
 
             img_neurons_mapper = {
-                s: label
+                label: s
                 for s in self._neurons_logger.columns
-                if (label := "".join(c for c in s.split(":")[1] if c not in "[,]"))
+                if (label := "".join(c for c in s.split(":")[1]
+                                     if c not in "[,]"))
                 in self._img_logger.columns
+            }
+            img_inputs_mapper = {
+                label: iid
+                for label, iid in zip(self._img_logger.columns,
+                                     self._inputs_logger.columns[-3*iw*ih:])
             }
             pprint.pprint(img_neurons_mapper)
 
-            for c_img, c_input, c_neuron in zip(
-                    self._img_logger.columns,
-                    self._inputs_logger.columns[8:],
-                    self._neurons_logger.columns[8:]):
-                print(c_img, c_input, c_neuron, img_neurons_mapper[c_neuron])
+            fig = plt.figure(figsize=(3*iw*2.5, ih*2.5))
+            sub_figs = fig.subfigures(1, 3, wspace=0)
+            axes = [sub_fig.subplots(ih, iw, sharex='all', sharey='all',
+                                     gridspec_kw={'wspace': 0, 'hspace': .25})
+                    for sub_fig in sub_figs.ravel()]
+            pprint.pprint(axes)
 
             assert (len(self._img_logger) == len(self._inputs_logger)
                     == len(self._neurons_logger))
 
+            for c, sub_axes in zip("RGB", axes):
+                for c_img, ax in zip([col for col in self._img_logger.columns
+                                     if col[0] == c],
+                                     sub_axes.flatten()):
+                    c_input = img_inputs_mapper[c_img]
+                    c_neuron = img_neurons_mapper[c_img]
+                    print(c_img, c_input, c_neuron, ax)
+                    for data, name in [(self._img_logger[c_img], "Image"),
+                                       (self._inputs_logger[c_input], "Inputs"),
+                                       (self._neurons_logger[c_neuron], "Neurons")]:
+                        ax.plot(data, label=name)
+                    ax.set_title(f"{c_img}/{c_input}/{c_neuron}")
+
+            # fig.tight_layout()
+            fig.savefig(self.runner.options.save_folder.joinpath("debug.png"),
+                        bbox_inches='tight')
+
+            print(self.runner.options.save_folder)
         # if self._steps == 0:
         #     os.environ["QT_QPA_PLATFORM"] = "offscreen"
         #
