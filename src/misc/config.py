@@ -63,8 +63,8 @@ class Config:
     body_type: Annotated[BodyType, "Morphological specification"] = BodyType.GECKO
 
     debug_retina_brain: Annotated[
-        bool, ("Provide very verbose logging information about"
-               " camera/retina/brain mapping")] = False
+        int, ("Provide very verbose logging information about"
+               " camera/retina/brain mapping")] = 0
 
     @classmethod
     def write_json(cls, file: Path):

@@ -380,9 +380,9 @@ class Scenario:
             self._neurons_logger = pd.read_csv(controller._ann_log_file.name,
                                                sep=' ', index_col="Step")
 
-            print(self._img_logger.columns)
-            print(self._inputs_logger.columns)
-            print(self._neurons_logger.columns)
+            # print(self._img_logger.columns)
+            # print(self._inputs_logger.columns)
+            # print(self._neurons_logger.columns)
 
             img_neurons_mapper = {
                 label: s
@@ -394,32 +394,44 @@ class Scenario:
             img_inputs_mapper = {
                 label: iid
                 for label, iid in zip(self._img_logger.columns,
-                                     self._inputs_logger.columns[-3*iw*ih:])
+                                      self._inputs_logger.columns[-3*iw*ih:])
             }
-            pprint.pprint(img_neurons_mapper)
+            # pprint.pprint(img_neurons_mapper)
 
-            fig = plt.figure(figsize=(3*iw*2.5, ih*2.5))
-            sub_figs = fig.subfigures(1, 3, wspace=0)
+            fig_size = 3
+            fig = plt.figure(figsize=(3*iw*fig_size, ih*fig_size),
+                             layout="constrained")
+            sub_figs = fig.subfigures(1, 3, wspace=.02)
             axes = [sub_fig.subplots(ih, iw, sharex='all', sharey='all',
                                      gridspec_kw={'wspace': 0, 'hspace': .25})
                     for sub_fig in sub_figs.ravel()]
-            pprint.pprint(axes)
 
             assert (len(self._img_logger) == len(self._inputs_logger)
                     == len(self._neurons_logger))
 
             for c, sub_axes in zip("RGB", axes):
-                for c_img, ax in zip([col for col in self._img_logger.columns
-                                     if col[0] == c],
-                                     sub_axes.flatten()):
+                columns = [
+                    col for col in self._img_logger.columns if col[0] == c
+                ]
+                columns = sorted(columns, key=lambda c: (-int(c[2]), int(c[1])))
+                for c_img, ax in zip(columns, sub_axes.flatten()):
                     c_input = img_inputs_mapper[c_img]
                     c_neuron = img_neurons_mapper[c_img]
-                    print(c_img, c_input, c_neuron, ax)
-                    for data, name in [(self._img_logger[c_img], "Image"),
-                                       (self._inputs_logger[c_input], "Inputs"),
-                                       (self._neurons_logger[c_neuron], "Neurons")]:
-                        ax.plot(data, label=name)
-                    ax.set_title(f"{c_img}/{c_input}/{c_neuron}")
+                    # print(c_img, c_input, c_neuron, ax)
+                    for data, name, color in [
+                            (self._img_logger[c_img], "Image", 'm'),
+                            (self._inputs_logger[c_input], "Inputs", 'y'),
+                            (self._neurons_logger[c_neuron], "Neurons", 'c')]:
+                        ax.plot(data, label=name, color=color, alpha=.33)
+                    ax.set_ylim([0, 1])
+                    ax.grid()
+                    ax.set_title(f"{c_img} | {c_input} | {c_neuron}",
+                                 fontsize=10)
+
+            handles, labels = ax.get_legend_handles_labels()
+            # print(f"{handles=}")
+            # print(f"{labels=}")
+            fig.legend(handles, labels, loc='upper center', ncols=3, bbox_to_anchor=(0.5, 1.05))
 
             # fig.tight_layout()
             fig.savefig(self.runner.options.save_folder.joinpath("debug.png"),
@@ -517,7 +529,7 @@ class Scenario:
         # Add texture and material for the ground
         xml.asset.add('texture', name="grid", type="2d", builtin="checker",
                       width="512", height="512",
-                      rgb1=".1 .2 .3", rgb2=".2 .3 .4")
+                      rgb1=".1 .1 .1", rgb2=".2 .2 .2")
         xml.asset.add('material', name="grid", texture="grid",
                       texrepeat="1 1", texuniform="true", reflectance="0")
         xml.worldbody.add('geom', name="floor",

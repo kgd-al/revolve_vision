@@ -55,6 +55,17 @@ class OpenGLVision:
         self.img = np.zeros((self.height, self.width, 3), dtype=np.uint8)
 
     def process(self, model, data):
+        """
+        Grab pixels from the underlying opengl context
+
+         First updates the mujoco scene using the `model` and `data`, then
+         renders it to an offscreen buffer and grab its contents
+
+         :param model: the mujoco static data
+         :param data: the mujoco dynamical data
+
+         :return: a numpy array (RGB format)
+        """
         mujoco.mjv_updateScene(
             model, data,
             self.vopt, self.pert, self.cam, mujoco.mjtCatBit.mjCAT_ALL.value,

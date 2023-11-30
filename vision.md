@@ -102,9 +102,16 @@ This piece of code has 3 objectives:
  - Generating the individual "vision" object (i.e. a context, viewport, framebuffer...)
  - Produce a np.array containing the rendered data
 
-> :warning: the return img is provided as-is. Mujoco uses a BGR format with a flipped
+> :warning: the return img is provided as-is.
+> 
+> ~~Mujoco uses a BGR format with a flipped
 > up-down coordinate system. Either use `cv2.cvtColor(np.flipud(img), cv2.COLOR_RGBA2BGR)`
-> to transform it into a more natural array or take care when indexing
+> to transform it into a more natural array or take care when indexing~~
+> 
+> Mujoco (or rather the underlying opengl framebuffer) uses traditional RGB
+> format. **However**, when combined with cv2 (which natively uses BGR with
+> flipped up-down coordinate system), the image needs to be transformed via
+> `cv2.cvtColor(np.flipud(img), cv2.COLOR_RGBA2BGR)`.
 
 The variable `Config.opengl_lib` is, in my case, a static configuration variable.
 Other than that, the variable `model` and `data` in function `process` refer to the

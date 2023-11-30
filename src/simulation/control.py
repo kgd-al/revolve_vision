@@ -90,7 +90,11 @@ class ANNControl:
             self.i_buffer[:off] = [pos for pos in data.sensors]
 
             if self.vision is not None:
-                img = self.vision.process(data.model, data.data)
+                if Config.debug_retina_brain > 1:
+                    img = self._debug_retina_image()
+                    self.vision.img = img
+                else:
+                    img = self.vision.process(data.model, data.data)
                 self.i_buffer[off:] = [x / 255 for x in img.flat]
 
             self._step += 1
@@ -121,7 +125,7 @@ class ANNControl:
             self._ann_log_file.write("\n")
 
         def log_ann_data(self):
-            self._ann_log_file.write(f"{self._step}")
+            self._ann_log_file.write(f"{self._step-1}")
             for n in self.brain.neurons():
                 if n.type in self._valid_types_flag:
                     self._ann_log_file.write(f" {n.value}")
@@ -130,6 +134,13 @@ class ANNControl:
         def stop_log_ann_data(self):
             logging.info(f"Generated {self._ann_log_file.name}")
             self._ann_log_file.close()
+
+            print("[kgd-debug] testing pyplot dynamical rendering")
+
+        def _debug_retina_image(self):
+            img = np.zeros_like(self.vision.img)
+            img.flat[self._step % img.size] = 255
+            return img
 
         @classmethod
         def deserialize(cls, data: StaticData) -> Serializable:
@@ -181,9 +192,9 @@ class ANNControl:
             if self.brain_dna.with_vision():
                 mapper = retina_mapper()
                 w, h = self.brain_dna.vision
-                for j in reversed(range(h)):
+                for j in range(h):
                     for i in range(w):
-                        for k, c in enumerate("BGR"):
+                        for k, c in enumerate("RGB"):
                             p = mapper(i, j, k, w, h)
                             inputs.append(p)
 

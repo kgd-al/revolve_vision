@@ -30,7 +30,7 @@ update revolve_vision bin src scripts
 update abrain src commands.sh CMakeLists.txt setup.py
 update revolve ./{core,runners}
 
-if [ $2 == '--compile' ]
+if [ $# -gt 1 ] && [ $2 == '--compile' ]
 then
   ssh $user@$host bash <<EOF
     set -euo pipefail
