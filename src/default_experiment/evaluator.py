@@ -1,21 +1,17 @@
 import logging
-import math
-import pprint
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
-import numpy as np
-
 import abrain
 from abrain.core.ann import plotly_render
-from ..misc.config import Config
+
 from .scenario import build_robot, Scenario
 from ..evolution.common import EvaluationResult
+from ..misc.config import Config
 from ..misc.genome import RVGenome
 from ..simulation.control import OpenGLVision
-from ..simulation.runner import Runner, RunnerOptions, CallbackType, \
-    ANNDataLogging
+from ..simulation.runner import Runner, RunnerOptions, CallbackType
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +63,8 @@ class Evaluator:
             specs = Config.env_specifications
 
         with_labels = (options.ann_save_path is not None
-                       or options.runner.ann_data_logging != ANNDataLogging.NONE)
+                       or options.runner.ann_neurons_file
+                       or options.runner.ann_dynamics_file)
         robot_body, robot_brain = build_robot(genome, with_labels)
         brain: abrain.ANN = robot_brain.brain
 

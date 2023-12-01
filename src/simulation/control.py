@@ -1,23 +1,20 @@
-import logging
 import pprint
-from pathlib import Path
 from random import Random
 from typing import List, Tuple, Optional
 
-import cv2
-import numpy as np
-from mujoco import MjModel, MjData
-from revolve2.serialization import StaticData, Serializable
-
 import abrain
+import numpy as np
 from abrain import Point, CPPN
+from mujoco import MjModel, MjData
 from revolve2.actor_controller import ActorController
 from revolve2.core.modular_robot import Brain, Body, ActiveHinge
 from revolve2.core.modular_robot.brains import BrainCpgNetworkNeighbour
+from revolve2.serialization import StaticData, Serializable
+
 from .vision import OpenGLVision
 from ..misc.config import Config
 from ..misc.genome import RVGenome
-from ..simulation.runner import DefaultActorControl, ANNDataLogging
+from ..simulation.runner import DefaultActorControl
 
 
 # ==============================================================================
@@ -102,40 +99,6 @@ class ANNControl:
             self.brain.__call__(self.i_buffer, self.o_buffer)
 
             # pprint.pprint([n.value for n in self.brain.neurons()])
-
-        def start_log_ann_data(self,
-                               level: Optional[ANNDataLogging] = None,
-                               filepath: Optional[Path] = None):
-            self._ann_log_level = level
-            self._ann_log_file = open(filepath, 'w')
-
-            ann_type = abrain.ANN.Neuron.Type
-            log_type = ANNDataLogging
-            self._valid_types_flag = [
-                ann_t for ann_t, log_t in [
-                    (ann_type.I, log_type.INPUTS),
-                    (ann_type.H, log_type.HIDDEN),
-                    (ann_type.O, log_type.OUTPUTS),
-                ] if level & log_t]
-
-            self._ann_log_file.write("Step")
-            for n in self.brain.neurons():
-                if n.type in self._valid_types_flag:
-                    self._ann_log_file.write(f" {n.pos}:{self.labels.get(n.pos)}")
-            self._ann_log_file.write("\n")
-
-        def log_ann_data(self):
-            self._ann_log_file.write(f"{self._step-1}")
-            for n in self.brain.neurons():
-                if n.type in self._valid_types_flag:
-                    self._ann_log_file.write(f" {n.value}")
-            self._ann_log_file.write("\n")
-
-        def stop_log_ann_data(self):
-            logging.info(f"Generated {self._ann_log_file.name}")
-            self._ann_log_file.close()
-
-            print("[kgd-debug] testing pyplot dynamical rendering")
 
         def _debug_retina_image(self):
             img = np.zeros_like(self.vision.img)

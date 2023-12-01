@@ -11,6 +11,8 @@ from functools import partial
 from pathlib import Path
 from typing import Callable, Dict, Optional, Union
 
+from abrain.core.ann import ANNMonitor
+
 if "DISPLAY" in os.environ:
     import glfw
 else:
@@ -48,12 +50,11 @@ MovieCallback = Callable[[np.ndarray], None]
 RunnerCallbacks = Dict[CallbackType, Union[RunnerCallback, MovieCallback]]
 
 
-class ANNDataLogging(Flag):
-    INPUTS = auto()
-    HIDDEN = auto()
-    OUTPUTS = auto()
+class MonitorType(Flag):
+    NEURONS = auto()
+    DYNAMICS = NEURONS
+    ALL = DYNAMICS
     NONE = 0
-    ALL = INPUTS | HIDDEN | OUTPUTS
 
 
 @dataclass
@@ -82,11 +83,11 @@ class RunnerOptions:
     current_specs: str = ""
 
     save_folder: Optional[Path] = None
-    ann_data_logging: ANNDataLogging = ANNDataLogging.NONE
+    ann_neurons_file: Optional[Path] = None
+    ann_dynamics_file: Optional[Path] = None
+    path_log_file: Optional[Path] = None
 
     debug_retina_brain = False
-
-    log_path: Optional[str] = None
 
 
 class DefaultActorControl(ActorControl):
@@ -295,11 +296,15 @@ class Runner(LocalRunner):
 
         control_step = 1 / Config.control_frequency
 
-        if self.options.ann_data_logging != ANNDataLogging.NONE:
-            self.controller.actor_controller.start_log_ann_data(
-                self.options.ann_data_logging,
-                self.options.save_folder.joinpath(self.options.ann_data_file)
-            )
+        ann_monitor = None
+        if self.options.ann_dynamics_file or self.options.ann_neurons_file:
+            ann_monitor = ANNMonitor(
+                ann=self.controller.actor_controller.brain,
+                labels=self.controller.actor_controller.labels,
+                folder=self.options.save_folder,
+                neurons_file=self.options.ann_neurons_file,
+                dynamics_file=self.options.ann_dynamics_file)
+            self.controller.actor_controller.monitor = ann_monitor
 
         self.running = True
         while (self.running and
@@ -332,16 +337,16 @@ class Runner(LocalRunner):
                 if CallbackType.POST_CONTROL_STEP in self.callbacks:
                     self.callbacks[CallbackType.POST_CONTROL_STEP](control_step, self.model, self.data)
 
-                if self.options.ann_data_logging != ANNDataLogging.NONE:
-                    self.controller.actor_controller.log_ann_data()
+                if ann_monitor:
+                    ann_monitor.step()
 
             if not self.headless:
                 self.update_view(time)
 
         self.running = False
 
-        if self.options.ann_data_logging != ANNDataLogging.NONE:
-            self.controller.actor_controller.stop_log_ann_data()
+        if ann_monitor:
+            ann_monitor.close()
 
         if not self.headless:
             self.close_view()

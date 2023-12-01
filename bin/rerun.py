@@ -23,7 +23,7 @@ from src.default_experiment.evaluator import Evaluator, EvalOptions
 from src.evolution.common import Individual
 from src.misc.config import Config
 from src.misc.genome import RVGenome
-from src.simulation.runner import RunnerOptions, ANNDataLogging
+from src.simulation.runner import RunnerOptions
 
 
 class Options:
@@ -39,10 +39,9 @@ class Options:
         self.save_ann: bool = False
         self.save_cppn: bool = False
         self.draw_cppn: bool = False
-        self.save_neurons: str = str(ANNDataLogging.NONE)
+        self.save_neurons: bool = False
+        self.plot_ann: bool = False
         self.save_path: bool = False
-
-        self.debug_retina_rain = False
 
         self.specs: str = ""
 
@@ -83,16 +82,23 @@ class Options:
         group.add_argument('--no-performance-check', dest="perf_check",
                            action='store_false',
                            help="Do not check for identical behavior")
+
         group.add_argument('--write-cppn', dest="save_cppn", action='store_true',
                            help="Requests that the CPPN be written to file")
         group.add_argument('--draw-cppn', dest="draw_cppn", action='store_true',
                            help="Requests that the CPPN be used to draw some"
                                 " of its patterns")
-        group.add_argument('--write-ann', dest="save_ann", action='store_true',
+
+        group.add_argument('--write-ann', dest="save_ann",
+                           action='store_true',
                            help="Requests that the ANN be written to file")
         group.add_argument('--log-neurons', dest="save_neurons",
-                           help=f"Requests that neuron states be written to file. "
-                                f"Valid values are {[v.name for v in ANNDataLogging]}")
+                           action='store_true',
+                           help=f"Requests that neuron states be written to file.")
+        group.add_argument('--plot-ann', dest="plot_ann",
+                           action='store_true',
+                           help=f"Renders a dynamical plot of the ANN")
+
         group.add_argument('--log-trajectory', dest="save_path", action='store_true',
                            help=f"Log robot path (and instant fitness)")
         group.add_argument('--specs',
@@ -222,14 +228,17 @@ def main() -> int:
         save_folder = True
         options.ann_save_path = args.robot.stem + ".ann.html"
 
-    if args.save_neurons != str(ANNDataLogging.NONE):
+    if args.save_neurons or Config.debug_retina_brain:
         save_folder = True
-        options.runner.ann_data_logging = ANNDataLogging[args.save_neurons]
-        options.runner.ann_data_file = args.robot.stem + ".neurons.dat"
+        options.runner.ann_neurons_file = args.robot.stem + ".neurons.dat"
+
+    if args.plot_ann:
+        save_folder = True
+        options.runner.ann_dynamics_file = args.robot.stem + ".ann.html"
 
     if args.save_path:
         save_folder = True
-        options.runner.log_path = args.robot.stem + ".trajectory.dat"
+        options.runner.path_log_file = args.robot.stem + ".trajectory.dat"
 
     save_folder |= Config.debug_retina_brain
 
@@ -256,17 +265,6 @@ def main() -> int:
 
     ind = Individual.from_file(args.robot)
     genome = ind.genome
-
-    # TODO REMOVE
-    # for r in ["X", "Y", "Z", "R0", "R1", "R2"]:
-    #     Config.retina_configuration = r
-    #     robot_body, robot_brain = scenario.build_robot(genome, True)
-    #     brain: abrain.ANN = robot_brain.brain
-    #     file = f"test-brain-{r}.html"
-    #     plotly_render(brain).write_html(file)
-    #     print("Generated", file, Path(file).exists())
-    #
-    # exit(42)
 
     if args.save_cppn:
         path = str(args.robot.parent.joinpath(args.robot.stem + ".cppn"))

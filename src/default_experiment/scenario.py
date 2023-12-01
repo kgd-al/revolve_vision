@@ -113,15 +113,16 @@ class Scenario:
         self._steps = 0
         self._speed = 0
 
-        if runner.options.log_path:
+        self.path_logger = None
+        if runner.options.path_log_file:
             self.path_log_path = (
-                runner.options.save_folder.joinpath(runner.options.log_path))
+                runner.options.save_folder.joinpath(runner.options.path_log_file))
             logger.debug(f"Logging path to {self.path_log_path}")
             self.path_logger = open(self.path_log_path, 'w')
             self.path_logger.write(f"X Y\n")
 
     def finalize(self):
-        if self.runner.options.log_path:
+        if self.path_logger:
             # self.path_logger.write(f"{self.collected is not None}"
             #                        f" {self.local_fitness()[1]}")
             self.path_logger.close()
@@ -132,7 +133,8 @@ class Scenario:
 
     @classmethod
     def aggregate(cls, folders, fitnesses, options):
-        if options.log_path:
+        path_file = options.path_log_file
+        if path_file:
             os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
             n = len(folders)
@@ -143,7 +145,7 @@ class Scenario:
                                      subplot_kw=dict(box_aspect=1))
             for ax, f in zip(axes.flatten(), folders):
                 spec = f.stem
-                df = pd.read_csv(f.joinpath(options.log_path), sep=' ')
+                df = pd.read_csv(f.joinpath(path_file), sep=' ')
                 contact, success = fitnesses[spec]
                 # df = df.iloc[:-1].astype(float)
                 ax.add_collection(collections.EllipseCollection(
@@ -203,7 +205,7 @@ class Scenario:
                 dt * math.sqrt((p0[0] - p1[0]) ** 2 + ((p0[1] - p1[1]) ** 2)))
         self._prev_position = p1
 
-        if self.runner.options.log_path:
+        if self.runner.options.path_log_file:
             self.path_logger.write(f"{p1.x} {p1.y}\n")
 
         if Config.debug_retina_brain:
@@ -377,8 +379,7 @@ class Scenario:
                 self.runner.options.save_folder.joinpath('debug.img.dat'))
             self._inputs_logger.to_csv(
                 self.runner.options.save_folder.joinpath('debug.inputs.dat'))
-            self._neurons_logger = pd.read_csv(controller._ann_log_file.name,
-                                               sep=' ', index_col="Step")
+            self._neurons_logger = controller.monitor.neurons_data
 
             # print(self._img_logger.columns)
             # print(self._inputs_logger.columns)
