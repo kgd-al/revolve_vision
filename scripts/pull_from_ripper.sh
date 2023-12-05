@@ -19,11 +19,11 @@ fi
 host=ripper$i
 base=$user@$host:data/revolve/
 
-exp='identify_v*'
+exp='identify_v2'
 
 info=""
 # info=--info=progress2
-rsync -avzh $info $base/ remote -f '+ '$exp'/' -f '+ *-100K/' -f '+ *.json' -f '+ iteration-final.p' -f '+ plots/' -f '+ snapshots' -f '+ *.png' -f '+ *.mp4' -f '+ *.dot' -f '- *'
+rsync -avzh $info $base/ remote --prune-empty-dirs -f '+ '$exp'/' -f '+ *-100K/' -f '+ *.json' -f '+ iteration-final.p' -f '+ plots/' -f '+ snapshots' -f '+ *.png' -f '+ [A-Z][A-Z]/' -f '+ *.mp4' -f '+ *.html' -f '+ *.dot' -f '- *'
 
 [ -z ${VIRTUAL_ENV+x} ] && source ~/work/code/vu/venv/bin/activate
 

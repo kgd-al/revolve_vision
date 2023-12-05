@@ -74,7 +74,7 @@ def main():
                 if k_ not in lhs:
                     lhs[k_] = {}
                 if group not in lhs[k_]:
-                    lhs[k_][group] = v_
+                    lhs[k_][group] = np.c_[v_]
                 else:
                     lhs[k_][group] = np.c_[lhs[k_][group], v_]
 

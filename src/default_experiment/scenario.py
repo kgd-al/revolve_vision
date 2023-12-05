@@ -172,7 +172,7 @@ class Scenario:
 
             fitness = cls.fitness(fitnesses, Config.env_specifications)
 
-            path = options.save_folder.joinpath(options.log_path).with_suffix('.png')
+            path = options.save_folder.joinpath(options.path_log_file).with_suffix('.png')
             fig.suptitle(f"Fitness: {fitness:g}")
             fig.tight_layout()
             fig.savefig(path, bbox_inches='tight')
@@ -260,11 +260,14 @@ class Scenario:
             x, y = self._items_pos
             def d(i0, j0, i1, j1): return math.sqrt((i1-i0)**2 + (j1-j0)**2)
 
+            p = 0  # Additional penalty
+
             # (v0) Strict version -> rewards getting close to the correct object
             if Config.fitness == "v0":
                 i = np.argmax([self._fitness(s) for s
                                in self.runner.options.current_specs])
-                y *= i * -1
+                if i == 1:
+                    y *= -1
                 d = d(x1, y1, x, y) / d(x0, y0, x, y)
 
             # (v1) Nice version -> rewards getting close to any object
@@ -273,11 +276,20 @@ class Scenario:
                     d(x1, y1, x, i*y) / d(x0, y0, x, i*y) for i in [-1, 1]
                 ])
 
+            # (v2) Stricter version -> penalty for not touching an object
+            if Config.fitness == "v2":
+                i = np.argmax([self._fitness(s) for s
+                               in self.runner.options.current_specs])
+                if i == 1:
+                    y *= -1
+                d = d(x1, y1, x, y) / d(x0, y0, x, y)
+                p = .5
+
             else:
                 d = 0
                 logger.error("No fitness config value!")
 
-            score = .1 * (1 - d)
+            score = .1 * (1 - d) - p
             return False, score
 
     @classmethod
@@ -297,8 +309,6 @@ class Scenario:
     def fitness(cls, fitnesses, specs):
         f_max = cls._fitness_bounds(specs)
         score = 100 * np.sum([t[1] for t in fitnesses.values()]) / f_max
-        if not np.any([t[0] for t in fitnesses.values()]):
-            score -= 100
         return max(-100, score)
 
     # ==========================================================================

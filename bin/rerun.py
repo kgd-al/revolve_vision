@@ -224,6 +224,8 @@ def main() -> int:
             settings_restore=args.settings_restore,
         )
 
+    args.save_neurons |= args.plot_ann
+
     if args.save_ann:
         save_folder = True
         options.ann_save_path = args.robot.stem + ".ann.html"

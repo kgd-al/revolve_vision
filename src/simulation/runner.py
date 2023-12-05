@@ -303,7 +303,8 @@ class Runner(LocalRunner):
                 labels=self.controller.actor_controller.labels,
                 folder=self.options.save_folder,
                 neurons_file=self.options.ann_neurons_file,
-                dynamics_file=self.options.ann_dynamics_file)
+                dynamics_file=self.options.ann_dynamics_file,
+                dt=1/Config.control_frequency)
             self.controller.actor_controller.monitor = ann_monitor
 
         self.running = True

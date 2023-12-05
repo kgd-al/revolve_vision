@@ -107,53 +107,53 @@ class Evaluator:
         save_folder = options.runner.save_folder
         save_folders = []
 
-        if not r.reject:
-            for spec in specs:
-                options.runner.current_specs = spec
+        for spec in specs:
+            options.runner.current_specs = spec
 
-                if save_folder:
-                    options.runner.save_folder = save_folder.joinpath(spec)
-                    options.runner.save_folder.mkdir(parents=True,
-                                                     exist_ok=True)
-                    save_folders.append(options.runner.save_folder)
+            if save_folder:
+                options.runner.save_folder = save_folder.joinpath(spec)
+                options.runner.save_folder.mkdir(parents=True,
+                                                 exist_ok=True)
+                save_folders.append(options.runner.save_folder)
 
-                runner = Runner(robot_body, robot_brain, options.runner,
-                                Scenario.amend,
-                                position=Scenario.initial_position())
-                scenario = Scenario(runner, genome.id())
+            runner = Runner(robot_body, robot_brain, options.runner,
+                            Scenario.amend,
+                            position=Scenario.initial_position())
+            scenario = Scenario(runner, genome.id())
 
-                runner.callbacks[CallbackType.PRE_CONTROL_STEP] = (
-                    scenario.pre_control_step)
-                runner.callbacks[CallbackType.POST_CONTROL_STEP] = (
-                    scenario.post_control_step)
+            runner.callbacks[CallbackType.PRE_CONTROL_STEP] = (
+                scenario.pre_control_step)
+            runner.callbacks[CallbackType.POST_CONTROL_STEP] = (
+                scenario.post_control_step)
 
-                if options.runner.record is not None:
-                    runner.callbacks[CallbackType.VIDEO_FRAME_CAPTURED] = (
-                        scenario.process_video_frame)
+            if options.runner.record is not None:
+                runner.callbacks[CallbackType.VIDEO_FRAME_CAPTURED] = (
+                    scenario.process_video_frame)
 
-                brain_controller = runner.controller.actor_controller
-                assert brain is brain_controller.brain
-                brain_controller.reset()
+            brain_controller = runner.controller.actor_controller
+            assert brain is brain_controller.brain
+            brain_controller.reset()
 
-                if genome.with_vision():
-                    brain_controller.vision = \
-                        OpenGLVision(runner.model, genome.vision,
-                                     runner.headless)
+            if genome.with_vision():
+                brain_controller.vision = \
+                    OpenGLVision(runner.model, genome.vision,
+                                 runner.headless)
 
-                if rerun:
-                    viewer = runner.viewer
+            if rerun:
+                viewer = runner.viewer
 
+            if not r.reject:
                 runner.run()
 
-                scenario.finalize()
+            scenario.finalize()
 
-                local_fitness = scenario.local_fitness()
-                fitnesses[spec] = local_fitness
+            local_fitness = scenario.local_fitness()
+            fitnesses[spec] = local_fitness
 
-                r.stats['items'][spec] = (local_fitness, scenario.collected)
+            r.stats['items'][spec] = (local_fitness, scenario.collected)
 
         options.runner.save_folder = save_folder
-        if not r.reject and save_folder:
+        if save_folder:
             Scenario.aggregate(save_folders, fitnesses, options.runner)
 
         r.fitnesses = {Scenario.fitness_name():
