@@ -22,6 +22,7 @@ class EvalOptions:
     specs: Optional[str | tuple[str]] = None
 
     ann_save_path: Optional[Path] = None
+    time_ann: bool = False
 
 
 class Evaluator:
@@ -161,6 +162,12 @@ class Evaluator:
         r.descriptors = cls._clip(Scenario.descriptors(genome, brain),
                                   Scenario.descriptor_bounds(),
                                   "features")
+
+        if "time" in r.stats:
+            if options.time_ann:
+                r.stats['time'] = brain.stats().dict()['time']
+            else:
+                del r.stats['time']
 
         if rerun:
             return r, viewer

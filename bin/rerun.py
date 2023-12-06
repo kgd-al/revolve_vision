@@ -41,6 +41,7 @@ class Options:
         self.draw_cppn: bool = False
         self.save_neurons: bool = False
         self.plot_ann: bool = False
+        self.time_ann: bool = False
         self.save_path: bool = False
 
         self.specs: str = ""
@@ -98,6 +99,8 @@ class Options:
         group.add_argument('--plot-ann', dest="plot_ann",
                            action='store_true',
                            help=f"Renders a dynamical plot of the ANN")
+        group.add_argument('--time-ann', dest="time_ann",
+                           action='store_true', help=f"Displays ANN timing data")
 
         group.add_argument('--log-trajectory', dest="save_path", action='store_true',
                            help=f"Log robot path (and instant fitness)")
@@ -237,6 +240,8 @@ def main() -> int:
     if args.plot_ann:
         save_folder = True
         options.runner.ann_dynamics_file = args.robot.stem + ".ann.html"
+
+    options.time_ann = args.time_ann
 
     if args.save_path:
         save_folder = True
