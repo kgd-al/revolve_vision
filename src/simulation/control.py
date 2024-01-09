@@ -4,7 +4,6 @@ from typing import List, Tuple, Optional
 
 import abrain
 import numpy as np
-from abrain import Point, CPPN
 from mujoco import MjModel, MjData
 from revolve2.actor_controller import ActorController
 from revolve2.core.modular_robot import Brain, Body, ActiveHinge
@@ -35,38 +34,44 @@ class SensorControlData(DefaultActorControl):
 def retina_mapper():
     rc = Config.RetinaConfiguration
     def debug_point(i, j, k, x, y, z):
-        p = Point(x, y, z)
+        p = abrain.Point(x, y, z)
         print(f"[kgd-debug] {i=} {j=} {k=}, {x=:+5.3f} {y=:+5.3f} {z=:+5.3f}")
         return p
 
     def random_point(seed):
         return lambda *_, rng=Random(seed): (
-            Point(rng.uniform(-1, 1),
-                  -1 + .1,
-                  rng.uniform(-1, 1)))
+            abrain.Point(
+                rng.uniform(-1, 1),
+                -1 + .1,
+                rng.uniform(-1, 1)))
     lut = {
         rc.R0: random_point(0),
         rc.R1: random_point(1),
         rc.R2: random_point(2),
         rc.X: lambda i, j, k, w, h:
-            Point(2 * (w * k + i) / (3 * w - 1) - 1,
-                  -1 + .1,
-                  2 * j / (h-1) - 1),
+            abrain.Point(
+                2 * (w * k + i) / (3 * w - 1) - 1,
+                -1 + .1,
+                2 * j / (h-1) - 1),
         rc.Y: lambda i, j, k, w, h:
-            Point(2 * i / (w-1) - 1,
-                  -1 + (k+1) * .1,
-                  2 * j / (h-1) - 1),
+            abrain.Point(
+                2 * i / (w-1) - 1,
+                -1 + (k+1) * .1,
+                2 * j / (h-1) - 1),
         rc.Z: lambda i, j, k, w, h:
-            Point(2 * i / (w - 1) - 1,
-                  -1 + .1,
-                  2 * (h * k + j) / (3 * h - 1) - 1),
+            abrain.Point(
+                2 * i / (w - 1) - 1,
+                -1 + .1,
+                2 * (h * k + j) / (3 * h - 1) - 1),
     }
     return lut[Config.retina_configuration]
 
 
 class ANNControl:
     class Controller(ActorController):
-        def __init__(self, genome: abrain.Genome, inputs: List[Point], outputs: List[Point]):
+        def __init__(self, genome: abrain.Genome,
+                     inputs: List[abrain.Point],
+                     outputs: List[abrain.Point]):
             self.brain = abrain.ANN.build(inputs, outputs, genome)
             self.i_buffer, self.o_buffer = self.brain.buffers()
 
@@ -143,9 +148,9 @@ class ANNControl:
 
             for i, did in enumerate(dof_ids):
                 p = hinges_map[did]
-                ip = Point(p[1], -1, p[0])
+                ip = abrain.Point(p[1], -1, p[0])
                 inputs.append(ip)
-                op = Point(p[1], 1, p[0])
+                op = abrain.Point(p[1], 1, p[0])
                 outputs.append(op)
 
                 if self.with_labels:
@@ -202,15 +207,15 @@ class CPGControl:
         ) -> Tuple[List[float], List[float]]:
             cppn = abrain.CPPN(self.genome)
 
-            internal_weights = [ # TODO Check the bounds
-                cppn(Point(*pos), Point(*pos), CPPN.Output.Weight)
+            internal_weights = [  # TODO Check the bounds
+                cppn(abrain.Point(*pos), abrain.Point(*pos), abrain.CPPN.Output.Weight)
                 for pos in [
                     body.grid_position(active_hinge) for active_hinge in active_hinges
                 ]
             ]
 
             external_weights = [
-                cppn(Point(*pos1), Point(*pos2), CPPN.Output.Weight)
+                cppn(abrain.Point(*pos1), abrain.Point(*pos2), abrain.CPPN.Output.Weight)
                 for (pos1, pos2) in [
                     (body.grid_position(active_hinge1), body.grid_position(active_hinge2))
                     for (active_hinge1, active_hinge2) in connections

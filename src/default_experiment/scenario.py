@@ -81,7 +81,7 @@ Runner.actorController_t = SensorControlData
 
 def build_robot(brain_dna: RVGenome, with_labels: bool):
     return (ModularRobot(default_body(),
-                        ANNControl.Brain(brain_dna, with_labels))
+                         ANNControl.Brain(brain_dna, with_labels))
             .make_actor_and_controller())
 
 
@@ -137,24 +137,37 @@ class Scenario:
         if path_file:
             os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+            hgs = .5 * Config.ground_size
+
             n = len(folders)
             n_rows = math.floor(math.sqrt(n))
             n_cols = n // n_rows
             fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols,
                                      sharex="all", sharey="all",
                                      subplot_kw=dict(box_aspect=1))
+
+            fig_agg, ax_agg = plt.subplots(1, 1,
+                                           subplot_kw=dict(box_aspect=1))
+            ax_agg.set_xlim(-hgs, hgs)
+            ax_agg.set_ylim(-hgs, hgs)
+
+            def add_item(_ax, _colors):
+                _ax.add_collection(collections.EllipseCollection(
+                    widths=2 * Config.item_size, heights=2 * Config.item_size,
+                    angles=0, units='xy', facecolors=_colors,
+                    offsets=[(cls._items_pos[0], i * cls._items_pos[1])
+                             for i in [1, -1]],
+                    offset_transform=_ax.transData
+                ))
+            add_item(ax_agg, ["gray", "gray"])
+
             for ax, f in zip(axes.flatten(), folders):
                 spec = f.stem
                 df = pd.read_csv(f.joinpath(path_file), sep=' ')
                 contact, success = fitnesses[spec]
                 # df = df.iloc[:-1].astype(float)
-                ax.add_collection(collections.EllipseCollection(
-                    widths=2*Config.item_size, heights=2*Config.item_size,
-                    angles=0, units='xy', facecolors=list(f.stem.lower()),
-                    offsets=[(cls._items_pos[0], i*cls._items_pos[1])
-                             for i in [1, -1]],
-                    offset_transform=ax.transData
-                ))
+
+                add_item(ax, list(f.stem.lower()))
 
                 color = "k"
                 if contact:
@@ -162,20 +175,30 @@ class Scenario:
 
                 ax.plot(df.X, df.Y, color=color)
 
-                hgs = .5 * Config.ground_size
                 ax.set_xlim(-hgs, hgs)
                 # ax.set_xlabel("X")
                 ax.set_ylim(-hgs, hgs)
                 # ax.set_ylabel("Y")
                 ax.set_title(f"{spec}: {round(success, 4):g}")
-                # ax.set_box_aspect(1)
+
+                ax_agg.plot(df.X, df.Y, color=color, alpha=1/n)
 
             fitness = cls.fitness(fitnesses, Config.env_specifications)
 
-            path = options.save_folder.joinpath(options.path_log_file).with_suffix('.png')
+            name = options.path_log_file.split('.')[0]
+
+            path = options.save_folder.joinpath(name + ".trajectories.png")
             fig.suptitle(f"Fitness: {fitness:g}")
             fig.tight_layout()
             fig.savefig(path, bbox_inches='tight')
+            plt.close(fig)
+            logger.info(f"Generated {path}")
+
+            path = options.save_folder.joinpath(name + ".trajectory.png")
+            fig_agg.suptitle(f"Fitness: {fitness:g}")
+            fig_agg.tight_layout()
+            fig_agg.savefig(path, bbox_inches='tight')
+            plt.close(fig_agg)
             logger.info(f"Generated {path}")
 
     def subject_position(self):
