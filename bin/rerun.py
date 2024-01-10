@@ -191,7 +191,8 @@ def main() -> int:
     else:
         logging.basicConfig(level=logging.DEBUG)
 
-    for m in ['OpenGL.arrays.arraydatatype', 'OpenGL.acceleratesupport']:
+    for m in ['matplotlib',
+              'OpenGL.arrays.arraydatatype', 'OpenGL.acceleratesupport']:
         logger = logging.getLogger(m)
         logger.setLevel(logging.WARNING)
 

@@ -8,6 +8,8 @@ from mujoco import MjModel, MjData
 
 from ..misc.config import Config
 
+logger = logging.getLogger(__name__)
+
 
 # ==============================================================================
 # Vision (through offscreen OpenGL Rendering)
@@ -34,7 +36,7 @@ class OpenGLVision:
                 raise ValueError(f"Unknown OpenGL backend {Config.opengl_lib}")
             OpenGLVision.global_context = GLContext(self.max_width, self.max_height)
             OpenGLVision.global_context.make_current()
-            logging.debug(f"Initialized {OpenGLVision.global_context=}")
+            logger.debug(f"Initialized {OpenGLVision.global_context=}")
 
         w, h = shape
         assert 0 < w <= self.max_width

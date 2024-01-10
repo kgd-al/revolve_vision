@@ -31,6 +31,8 @@ class Options:
         self.snapshots: int = 10
         self.overwrite: bool = False
 
+        self.specs = None
+
         self.verbosity: int = 1
 
         self.seed: Optional[int] = None
@@ -70,6 +72,9 @@ class Options:
                            help="Number of individuals competing in curiosity-based selection")
         group.add_argument('--budget', dest="budget", metavar='N',
                            type=int, help="Number of evaluations")
+        group.add_argument('--specs', dest="specs", metavar='S',
+                           type=str, help="Environmental specification as a"
+                                          " comma-separated list")
 
         group = parser.add_argument_group("Init",
                                           "Initial population parameters")
@@ -142,6 +147,9 @@ def main():
     Config.argparse_process(args)
     Config.evolution = args.__dict__
     Config._evolving = True
+
+    if args.specs is not None:
+        Config.env_specifications = tuple(args.specs.split(","))
 
     config_path = run_folder.joinpath("config.json")
     Config.write_json(config_path)
