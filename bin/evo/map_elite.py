@@ -96,6 +96,7 @@ def eval_mujoco(ind: QDIndividual):
     r: Evaluator.Result = Evaluator.evaluate_evo(ind.genome)
     ind.update(r)
     # print(ind, r)
+    ind.memory = r.memory
     return ind
 
 

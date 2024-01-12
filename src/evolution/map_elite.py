@@ -8,7 +8,7 @@ import sys
 from functools import partial
 from pathlib import Path
 from random import Random
-from typing import Iterable, Optional, Sequence, Any
+from typing import Iterable, Optional, Sequence, Any, Mapping
 
 import numpy as np
 import pandas as pd
@@ -173,6 +173,7 @@ class Logger(algorithms.TQDMAlgorithmLogger):
         super().__init__(*args, **kwargs,
                          final_filename=Logger.final_filename,
                          iteration_filenames=self.iteration_filenames)
+        self.memory_log = Path(self.log_base_path).joinpath("memory.log")
 
     def _started_optimisation(self, algo: QDAlgorithmLike) -> None:
         """Do a mery dance so that tqdm uses stdout instead of stderr"""
@@ -185,8 +186,13 @@ class Logger(algorithms.TQDMAlgorithmLogger):
         mid_rule = "-" * len(header)
         return header + "\n" + mid_rule
 
-    # def _tell(self, algo: QDAlgorithmLike, ind: IndividualLike) -> None:
-    #     super()._tell(algo, ind)
+    def _tell(self, algo: QDAlgorithmLike, ind: IndividualLike, added: bool,
+              xattr: Mapping[str, Any] = {}) -> None:
+        with open(self.memory_log, "a") as f:
+            if algo.nb_evaluations == 1:
+                f.write(" ".join(ind.memory.keys()) + "\n")
+            f.write(" ".join([str(f) for f in ind.memory.values()]) + "\n")
+        super()._tell(algo, ind, added, xattr)
 
     def summary_plots(self, **kwargs):
         os.environ["QT_QPA_PLATFORM"] = "offscreen"

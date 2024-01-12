@@ -1,9 +1,12 @@
 import logging
+import os
+import pprint
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 import abrain
+import psutil
 from abrain.core.ann import plotly_render
 
 from .scenario import build_robot, Scenario
@@ -162,6 +165,11 @@ class Evaluator:
         r.descriptors = cls._clip(Scenario.descriptors(genome, brain),
                                   Scenario.descriptor_bounds(),
                                   "features")
+
+        process = psutil.Process(os.getpid()).parent()
+        s_mem = psutil.virtual_memory()
+        r.memory = dict(used=process.memory_percent(),
+                        system=s_mem.percent)
 
         if "time" in r.stats:
             if options.time_ann:
