@@ -1,15 +1,13 @@
 import logging
-import os
-import pprint
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 import abrain
-import psutil
 from abrain.core.ann import plotly_render
 from .scenario import build_robot, Scenario
 from ..evolution.common import EvaluationResult
+from ..misc import monitoring
 from ..misc.config import Config
 from ..misc.genome import RVGenome
 from ..simulation.control import OpenGLVision
@@ -165,10 +163,7 @@ class Evaluator:
                                   Scenario.descriptor_bounds(),
                                   "features")
 
-        process = psutil.Process(os.getpid()).parent()
-        s_mem = psutil.virtual_memory()
-        r.memory = dict(used=process.memory_percent(),
-                        system=s_mem.percent)
+        r.memory = monitoring.memory()
 
         if "time" in r.stats:
             if options.time_ann:
