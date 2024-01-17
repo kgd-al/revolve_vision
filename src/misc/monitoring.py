@@ -2,6 +2,7 @@ import gc
 import os
 import pprint
 
+import guppy
 import psutil
 
 
@@ -12,9 +13,13 @@ def memory():
     else:
         used = process.memory_percent()
     s_mem = psutil.virtual_memory()
+
     # pprint.pprint(gc.get_stats())
     # gc.set_debug(gc.DEBUG_SAVEALL)
     # if gc.garbage:
     #     pprint.pprint(gc.garbage)
+
+    print(guppy.hpy().heap())
+
     return dict(used=used,
                 system=s_mem.percent)

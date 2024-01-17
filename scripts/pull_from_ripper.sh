@@ -19,7 +19,7 @@ fi
 host=ripper$i
 base=$user@$host:data/revolve/
 
-exp='identify_v2_2'
+exp='identify_v2_12'
 
 info=""
 # info=--info=progress2
