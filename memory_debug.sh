@@ -21,7 +21,6 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 folders=sorted(glob.glob('$out/*X*items/'), key=len)
-print(folders)
 
 data = {}
 for f in folders:
@@ -37,9 +36,11 @@ for f in folders:
      else:
           data[budget] = {(id, items): f}
 
-print("Collected")
 with PdfPages('$outfile') as file:
      for budget, series in sorted(data.items()):
+          if budget != 10_000:
+               continue
+
           ids_s = sorted(list(set(id for id, _ in series)))
           items_s = sorted(list(set(items for _, items in series)))
 
@@ -59,14 +60,25 @@ with PdfPages('$outfile') as file:
                               ax = axes[j,i]
                          ax.grid()
 
-                         pyt, = ax.plot(df.index, df.iloc[:, 0], label='python')
-                         sys, = ax.plot(df.index, df.iloc[:, 1], label='system')
+                         cols = df.columns
+                         if "gpu-used" in cols:
+                              handles = [h[0] for h in [
+                                   ax.plot('python-used', data=df),
+                                   ax.plot(df['python-used']+df['gpu-used'], label='Py+GPU Used'),
+                                   ax.plot('system-used', data=df),
+                                   ax.plot('system-total', ':k', data=df, label='total')
+                              ]]
+
+                         else:
+                              handles = [
+                                   ax.plot(df.index, df[c], label=c)[0] for c in cols
+                              ]
                          ax.set_title(folder.split("/")[-2])
 
           fig.supxlabel("Evaluation")
           fig.supylabel("Memory (%)")
 
-          fig.legend((pyt, sys), ("Python", "System"),
+          fig.legend(handles=handles,
                      loc='outside upper center', ncols=2)
 #           fig.tight_layout()
           file.savefig(fig)

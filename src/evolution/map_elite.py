@@ -148,6 +148,7 @@ class Algorithm(Evolution):
             "genome": i.genome.to_json()
         }
 
+
 class Grid(containers.Grid):
     def __init__(self, **kwargs):
         containers.Grid.__init__(self, **kwargs)

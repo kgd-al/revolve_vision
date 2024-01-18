@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple, Optional
 
 import abrain
 from abrain.core.ann import plotly_render
+
 from .scenario import build_robot, Scenario
 from ..evolution.common import EvaluationResult
 from ..misc import monitoring
