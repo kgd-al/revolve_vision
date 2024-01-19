@@ -38,8 +38,8 @@ for f in folders:
 
 with PdfPages('$outfile') as file:
      for budget, series in sorted(data.items()):
-          if budget != 10_000:
-               continue
+#           if budget != 10_000:
+#                continue
 
           ids_s = sorted(list(set(id for id, _ in series)))
           items_s = sorted(list(set(items for _, items in series)))
