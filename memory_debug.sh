@@ -49,7 +49,7 @@ with PdfPages('$outfile') as file:
           for i, id in enumerate(ids_s):
                for j, items in enumerate(items_s):
                     if (folder := series.get((id, items), None)) is not None:
-                         df = pd.read_csv(folder + "/memory.log", sep=' ')
+                         df = pd.read_csv(folder + "/memory.log", sep=' ') / (1024**3)
                          if len(ids_s) == 1 and len(items_s) == 1:
                               ax = axes
                          elif len(ids_s) == 1:
@@ -64,9 +64,9 @@ with PdfPages('$outfile') as file:
                          if "gpu-used" in cols:
                               handles = [h[0] for h in [
                                    ax.plot('python-used', data=df),
-                                   ax.plot(df['python-used']+df['gpu-used'], label='Py+GPU Used'),
+#                                    ax.plot(df['python-used']+df['gpu-used'], label='Py+GPU Used'),
                                    ax.plot('system-used', data=df),
-                                   ax.plot('system-total', ':k', data=df, label='total')
+                                   ax.plot('system-total', '--k', data=df, label='total')
                               ]]
 
                          else:
@@ -76,7 +76,7 @@ with PdfPages('$outfile') as file:
                          ax.set_title(folder.split("/")[-2])
 
           fig.supxlabel("Evaluation")
-          fig.supylabel("Memory (%)")
+          fig.supylabel("Memory (GiB)")
 
           fig.legend(handles=handles,
                      loc='outside upper center', ncols=2)

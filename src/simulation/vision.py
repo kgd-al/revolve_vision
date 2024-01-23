@@ -42,7 +42,7 @@ class OpenGLVision:
         assert 0 < w <= self.max_width
         assert 0 < h <= self.max_height
 
-        logger.info(f"New {self}")
+        # logger.info(f"New {self}")
 
         self.width, self.height = w, h
         self.context = mujoco.MjrContext(model, mujoco.mjtFontScale.mjFONTSCALE_150.value)
@@ -70,16 +70,17 @@ class OpenGLVision:
 
          :return: a numpy array (RGB format)
         """
-        # mujoco.mjv_updateScene(
-        #     model, data,
-        #     self.vopt, self.pert, self.cam, mujoco.mjtCatBit.mjCAT_ALL.value,
-        #     self.scene)
-        # mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, self.context)
-        # mujoco.mjr_render(self.viewport, self.scene, self.context)
-        # mujoco.mjr_readPixels(self.img, None, self.viewport, self.context)
+        mujoco.mjv_updateScene(
+            model, data,
+            self.vopt, self.pert, self.cam, mujoco.mjtCatBit.mjCAT_ALL.value,
+            self.scene)
+        mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, self.context)
+        mujoco.mjr_render(self.viewport, self.scene, self.context)
+        mujoco.mjr_readPixels(self.img, None, self.viewport, self.context)
 
         return self.img
 
     def __del__(self):
-        self.context.free()
-        logger.info(f"Del {self}")
+        # self.context.free()
+        # logger.info(f"Del {self}")
+        pass

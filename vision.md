@@ -11,6 +11,8 @@ is a pain (more on that latter)
 
 > :warning: This "documentation" does not claim to present the _best_ method.
 > Only one that works (for the author)
+> :warning: Hopefully everything will work smoothly for every GPU/CPU/OS. If not
+> look at the known issues at the end
 
 > All paths are relative to the main repository folder
 
@@ -162,7 +164,17 @@ However, this does not guarantee byte-wise identical results. In fact, there
 does not seem to be much difference between using a different context creator
 and the regular glfw (besides the fact that osmesa fails spectacularly to work).
 
+## 5. Known issues (and workaround?)
+
+> [!CAUTION]
+> In one instance, the system memory was increasing at every instantiation of MjrContext
+> without the python process declaring it.
+> No fixes were found :( but an update of the nvidia drivers and a restart seem to have
+> solved it. :)
+
+
 ## #. Miscellaneous
+
 
 Random notes:
 - osmesa-delegated glfw is useless (full cpu use without rendering)

@@ -117,7 +117,7 @@ def main():
 
     logging.basicConfig(
         level=logging.INFO,
-        format="[%(asctime)s]|[%(levelname)s]|[%(module)s] %(message)s",
+        format="[%(asctime)s|%(process)s|%(levelname)s|%(module)s] %(message)s",
         stream=sys.stdout
     )
     genome_logger.setLevel(logging.INFO)
