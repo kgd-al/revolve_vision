@@ -169,8 +169,7 @@ and the regular glfw (besides the fact that osmesa fails spectacularly to work).
 > [!CAUTION]
 > In one instance, the system memory was increasing at every instantiation of MjrContext
 > without the python process declaring it.
-> No fixes were found :( but an update of the nvidia drivers and a restart seem to have
-> solved it. :)
+> No fixes were found but the less parallel the process the lower the problems...
 
 
 ## #. Miscellaneous
